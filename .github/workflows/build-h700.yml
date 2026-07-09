@@ -1,4 +1,4 @@
-name: Build Ruffle H700 ARM64
+name: Build Ruffle H700 ARM64 Debian 11
 
 on:
   workflow_dispatch:
@@ -6,21 +6,30 @@ on:
 jobs:
   build:
     runs-on: ubuntu-24.04-arm
+    container:
+      image: debian:bullseye
 
     steps:
+      - name: Install system deps
+        run: |
+          apt update
+          apt install -y git curl build-essential pkg-config ca-certificates \
+            libssl-dev libasound2-dev libudev-dev libfontconfig1-dev \
+            libxcb1-dev zlib1g-dev file ldd
+
       - name: Checkout Ruffle
         uses: actions/checkout@v4
 
-      - name: Install deps
-        run: |
-          sudo apt update
-          sudo apt install -y git curl build-essential pkg-config libssl-dev libasound2-dev libudev-dev libfontconfig1-dev
-
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Build desktop
         run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          . "$HOME/.cargo/env"
+          rustc --version
+          cargo --version
+
+      - name: Build Ruffle Desktop
+        run: |
+          . "$HOME/.cargo/env"
           cargo build --release --package ruffle_desktop
 
       - name: Prepare artifact
@@ -39,9 +48,11 @@ jobs:
           fi
 
           chmod +x out/ruffle
+          file out/ruffle > out/info.txt
+          ldd out/ruffle >> out/info.txt || true
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ruffle-h700-arm64-test1
-          path: out/ruffle
+          name: ruffle-h700-debian11-glibc231
+          path: out/
