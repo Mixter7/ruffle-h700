@@ -15,7 +15,7 @@ jobs:
           apt update
           apt install -y git curl build-essential pkg-config ca-certificates \
             libssl-dev libasound2-dev libudev-dev libfontconfig1-dev \
-            libxcb1-dev zlib1g-dev file libc-bin
+            libxcb1-dev zlib1g-dev file libc-bin default-jre-headless
 
       - name: Checkout Ruffle
         uses: actions/checkout@v4
