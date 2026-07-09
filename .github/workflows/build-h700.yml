@@ -1,63 +1,100 @@
-name: Build Ruffle H700 ARM64 Debian 11
+name: Build Old Ruffle H700
 
 on:
   workflow_dispatch:
+    inputs:
+      revision:
+        description: "Ruffle revision/tag"
+        required: true
+        default: "nightly-2021-01-15"
 
 jobs:
   build:
     runs-on: ubuntu-24.04-arm
+
     container:
       image: debian:bullseye
 
     steps:
-      - name: Install system deps
+      - name: Install dependencies
         run: |
           apt update
-          apt install -y git curl build-essential pkg-config ca-certificates \
-            libssl-dev libasound2-dev libudev-dev libfontconfig1-dev \
-            libxcb1-dev zlib1g-dev file libc-bin default-jre-headless
+          apt install -y \
+            git curl ca-certificates build-essential pkg-config \
+            libssl-dev libasound2-dev libudev-dev \
+            libfontconfig1-dev libxcb1-dev zlib1g-dev \
+            libc-bin file default-jre-headless
 
       - name: Checkout Ruffle
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.revision }}
+          fetch-depth: 0
 
       - name: Install Rust
         run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          curl --proto '=https' --tlsv1.2 \
+            -sSf https://sh.rustup.rs | sh -s -- -y
           . "$HOME/.cargo/env"
           rustc --version
           cargo --version
 
-      - name: Build Ruffle Desktop
+      - name: Detect desktop package
+        run: |
+          echo "Workspace packages:"
+          . "$HOME/.cargo/env"
+          cargo metadata --no-deps --format-version 1 \
+            | grep -o '"name":"[^"]*"' \
+            | sort -u || true
+
+      - name: Build old Ruffle
         run: |
           . "$HOME/.cargo/env"
-          cargo build --release --package ruffle_desktop
+
+          if cargo metadata --no-deps --format-version 1 \
+            | grep -q '"name":"ruffle_desktop"'; then
+            cargo build --release --package ruffle_desktop
+          elif cargo metadata --no-deps --format-version 1 \
+            | grep -q '"name":"ruffle_desktop_native"'; then
+            cargo build --release --package ruffle_desktop_native
+          else
+            echo "Pacote desktop não identificado."
+            cargo build --release
+          fi
 
       - name: Prepare artifact
         run: |
-          mkdir -p out
           mkdir -p out/libs
 
-          cp /usr/lib/aarch64-linux-gnu/libssl.so.1.1 out/libs/
-          cp /usr/lib/aarch64-linux-gnu/libcrypto.so.1.1 out/libs/
+          find target/release -maxdepth 2 \
+            -type f -executable -print
 
-          echo "Arquivos encontrados:"
-          find target/release -maxdepth 2 -type f -executable -print
+          RUFFLE_FILE="$(find target/release -maxdepth 2 \
+            -type f -executable \
+            \( -name 'ruffle' -o -name 'ruffle_desktop' \
+            -o -name 'ruffle_desktop_native' \) \
+            | head -n 1)"
 
-          if [ -f target/release/ruffle ]; then
-            cp target/release/ruffle out/ruffle
-          elif [ -f target/release/ruffle_desktop ]; then
-            cp target/release/ruffle_desktop out/ruffle
-          else
-            echo "Nenhum executável encontrado!"
+          if [ -z "$RUFFLE_FILE" ]; then
+            echo "Executável do Ruffle não encontrado."
             exit 1
           fi
 
+          cp "$RUFFLE_FILE" out/ruffle
           chmod +x out/ruffle
-          file out/ruffle > out/info.txt
-          ldd out/ruffle >> out/info.txt || true
+
+          cp /usr/lib/aarch64-linux-gnu/libssl.so.1.1 \
+            out/libs/ 2>/dev/null || true
+          cp /usr/lib/aarch64-linux-gnu/libcrypto.so.1.1 \
+            out/libs/ 2>/dev/null || true
+
+          file out/ruffle | tee out/info.txt
+          ldd out/ruffle | tee -a out/info.txt || true
+
+          echo "${{ inputs.revision }}" > out/revision.txt
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ruffle-h700-debian11-glibc231
+          name: ruffle-old-${{ inputs.revision }}
           path: out/
