@@ -36,7 +36,6 @@ jobs:
         run: |
           mkdir -p out
           mkdir -p out/libs
-
          cp /usr/lib/aarch64-linux-gnu/libssl.so.1.1 out/libs/ 
          cp /usr/lib/aarch64-linux-gnu/libcrypto.so.1.1 out/libs/
 
