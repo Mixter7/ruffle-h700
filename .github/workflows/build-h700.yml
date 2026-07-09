@@ -35,9 +35,10 @@ jobs:
       - name: Prepare artifact
         run: |
           mkdir -p out
+          mkdir -p out/libs
 
-          find / -name "libssl.so*" 2>/dev/null
-          find / -name "libcrypto.so*" 2>/dev/null
+         cp /usr/lib/aarch64-linux-gnu/libssl.so.1.1 out/libs/
+         cp /usr/lib/aarch64-linux-gnu/libcrypto.so.1.1 out/libs/
 
           echo "Arquivos encontrados:"
           find target/release -maxdepth 2 -type f -executable -print
