@@ -62,6 +62,45 @@ jobs:
           . "$HOME/.cargo/env"
           cargo fetch
 
+      - name: Show winit XKB source
+        run: |
+          . "$HOME/.cargo/env"
+
+          XKB_FILE="$(grep -R -l \
+            'set_keymap_from_x11' \
+            "$HOME/.cargo/registry/src"/*/winit-*/src \
+            2>/dev/null \
+            | head -n 1)"
+
+          if [ -z "$XKB_FILE" ] || [ ! -f "$XKB_FILE" ]; then
+            echo "ERRO: arquivo XKB do winit não encontrado."
+            echo "Procurando ocorrências disponíveis:"
+            find "$HOME/.cargo/registry/src" -type f \
+              -path '*/winit-*/src/*.rs' \
+              -exec grep -l 'set_keymap_from_x11' {} \; \
+              2>/dev/null || true
+            exit 1
+          fi
+
+          echo "XKB_FILE=$XKB_FILE"
+          echo "$XKB_FILE" > /tmp/winit_xkb_file.txt
+
+          echo
+          echo "=== Funções XKB relevantes ==="
+          grep -n -C 35 \
+            -e 'fn from_x11_xkb' \
+            -e 'fn set_keymap_from_x11' \
+            -e 'fn set_keymap_from_names' \
+            -e 'xkb_x11_keymap_new_from_device' \
+            "$XKB_FILE" || true
+
+          echo
+          echo "=== Versão do winit ==="
+          WINIT_CARGO="$(dirname "$(dirname "$(dirname "$(dirname "$XKB_FILE")")")")/Cargo.toml"
+          if [ -f "$WINIT_CARGO" ]; then
+            grep -n -E '^(name|version) = ' "$WINIT_CARGO" | head -n 4
+          fi
+
       - name: Build native crash tracer
         run: |
           cat > /tmp/segvtrace.c <<'EOF'
