@@ -119,8 +119,15 @@ jobs:
             | sort -u \
             | while read -r lib; do
                 if [ -f "$lib" ]; then
-                  echo "Copiando: $lib"
-                  cp -L "$lib" out/libs/ 2>/dev/null || true
+                  case "$(basename "$lib")" in
+                    libc.so.*|libpthread.so.*|libdl.so.*|librt.so.*|libm.so.*|libgcc_s.so.*|ld-linux-*.so.*|libmount.so.*|libblkid.so.*)
+                      echo "Ignorando biblioteca do sistema: $lib"
+                      ;;
+                    *)
+                      echo "Copiando: $lib"
+                      cp -L "$lib" out/libs/ 2>/dev/null || true
+                      ;;
+                  esac
                 fi
               done
 
@@ -133,10 +140,28 @@ jobs:
             | sort -u \
             | while read -r lib; do
                 if [ -f "$lib" ]; then
-                  echo "Copiando: $lib"
-                  cp -L "$lib" out/libs/ 2>/dev/null || true
+                  case "$(basename "$lib")" in
+                    libc.so.*|libpthread.so.*|libdl.so.*|librt.so.*|libm.so.*|libgcc_s.so.*|ld-linux-*.so.*|libmount.so.*|libblkid.so.*)
+                      echo "Ignorando biblioteca do sistema: $lib"
+                      ;;
+                    *)
+                      echo "Copiando: $lib"
+                      cp -L "$lib" out/libs/ 2>/dev/null || true
+                      ;;
+                  esac
                 fi
               done
+
+          rm -f \
+            out/libs/libc.so.* \
+            out/libs/libpthread.so.* \
+            out/libs/libdl.so.* \
+            out/libs/librt.so.* \
+            out/libs/libm.so.* \
+            out/libs/libgcc_s.so.* \
+            out/libs/ld-linux-*.so.* \
+            out/libs/libmount.so.* \
+            out/libs/libblkid.so.*
 
           cp /tmp/ruffle_revision.txt out/revision.txt
 
@@ -146,8 +171,24 @@ jobs:
           echo "Bibliotecas empacotadas:"
           ls -lh out/libs
 
+          echo "Verificando bibliotecas proibidas:"
+          if find out/libs -maxdepth 1 -type f \
+            \( -name 'libc.so.*' \
+            -o -name 'libpthread.so.*' \
+            -o -name 'libdl.so.*' \
+            -o -name 'librt.so.*' \
+            -o -name 'libm.so.*' \
+            -o -name 'libgcc_s.so.*' \
+            -o -name 'ld-linux-*.so.*' \
+            -o -name 'libmount.so.*' \
+            -o -name 'libblkid.so.*' \) \
+            | grep -q .; then
+              echo "ERRO: bibliotecas críticas do sistema foram empacotadas."
+              exit 1
+          fi
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ruffle-h700-2023-gtk
+          name: ruffle-h700-2023-gtk-filtered
           path: out/
