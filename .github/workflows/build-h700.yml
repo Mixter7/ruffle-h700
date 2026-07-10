@@ -1,7 +1,12 @@
-name: Build Ruffle H700 PortMaster
+name: Build Old Ruffle H700
 
 on:
   workflow_dispatch:
+    inputs:
+      build_date:
+        description: "Data da versão do Ruffle"
+        required: true
+        default: "2023-01-15"
 
 jobs:
   build:
@@ -20,10 +25,29 @@ jobs:
             libfontconfig1-dev libxcb1-dev zlib1g-dev \
             libc-bin file default-jre-headless
 
-      - name: Checkout Ruffle
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Select old Ruffle commit
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+          OLD_COMMIT="$(git rev-list -n 1 \
+            --before="${{ inputs.build_date }} 23:59:59" \
+            origin/master)"
+
+          if [ -z "$OLD_COMMIT" ]; then
+            echo "Não foi encontrado um commit anterior à data informada."
+            exit 1
+          fi
+
+          echo "Commit selecionado: $OLD_COMMIT"
+          git checkout "$OLD_COMMIT"
+
+          echo "$OLD_COMMIT" > /tmp/ruffle_revision.txt
+          git log -1 --format="%H%n%ci%n%s"
 
       - name: Install Rust
         run: |
@@ -32,35 +56,37 @@ jobs:
 
           . "$HOME/.cargo/env"
 
+          if [ -f rust-toolchain.toml ] || [ -f rust-toolchain ]; then
+            rustup show
+          else
+            rustup default stable
+          fi
+
           rustc --version
           cargo --version
 
-      - name: Detect desktop package
+      - name: Show workspace packages
         run: |
           . "$HOME/.cargo/env"
-
-          echo "Workspace packages:"
 
           cargo metadata --no-deps --format-version 1 \
             | grep -o '"name":"[^"]*"' \
             | sort -u || true
 
-      - name: Build Ruffle
+      - name: Build old Ruffle
         run: |
           . "$HOME/.cargo/env"
 
           if cargo metadata --no-deps --format-version 1 \
             | grep -q '"name":"ruffle_desktop"'; then
-
             cargo build --release --package ruffle_desktop
 
           elif cargo metadata --no-deps --format-version 1 \
             | grep -q '"name":"ruffle_desktop_native"'; then
-
             cargo build --release --package ruffle_desktop_native
 
           else
-            echo "Pacote desktop não identificado."
+            echo "Pacote desktop não identificado; tentando workspace."
             cargo build --release
           fi
 
@@ -69,7 +95,6 @@ jobs:
           mkdir -p out/libs
 
           echo "Executáveis encontrados:"
-
           find target/release -maxdepth 2 \
             -type f -executable -print
 
@@ -94,13 +119,15 @@ jobs:
           cp /usr/lib/aarch64-linux-gnu/libcrypto.so.1.1 \
             out/libs/ 2>/dev/null || true
 
+          cp /tmp/ruffle_revision.txt out/revision.txt
+
+          echo "${{ inputs.build_date }}" > out/build-date.txt
+
           file out/ruffle | tee out/info.txt
           ldd out/ruffle | tee -a out/info.txt || true
-
-          echo "h700-portmaster diagnostic build" > out/revision.txt
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ruffle-h700-portmaster
+          name: ruffle-h700-${{ inputs.build_date }}
           path: out/
