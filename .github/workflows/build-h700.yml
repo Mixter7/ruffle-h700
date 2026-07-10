@@ -37,12 +37,13 @@ jobs:
           git rev-parse HEAD > /tmp/ruffle_revision.txt
 
           echo "Verificando alteração do backend H700..."
+          grep -n "H700" render/wgpu/src/backend.rs || true
 
           if grep -q "H700 ADAPTER ENUMERATION" render/wgpu/src/backend.rs; then
             echo "OK: patch de diagnóstico encontrado."
           else
             echo "ERRO: o backend.rs modificado não foi encontrado."
-            echo "Confirme que você salvou e fez commit da alteração."
+            echo "Confirme que você salvou, fez commit e sincronizou a alteração."
             exit 1
           fi
 
@@ -60,104 +61,6 @@ jobs:
         run: |
           . "$HOME/.cargo/env"
           cargo fetch
-
-      - name: Copy local winit 0.27.5
-        run: |
-          WINIT_SOURCE="$(find "$HOME/.cargo/registry/src" \
-            -type d \
-            -name 'winit-0.27.5' \
-            | head -n 1)"
-
-          if [ -z "$WINIT_SOURCE" ]; then
-            echo "ERRO: winit 0.27.5 não encontrado."
-            exit 1
-          fi
-
-          rm -rf third_party/winit
-          mkdir -p third_party
-          cp -a "$WINIT_SOURCE" third_party/winit
-          chmod -R u+w third_party/winit
-
-          test -f third_party/winit/Cargo.toml
-          test -f third_party/winit/src/platform_impl/linux/x11/ime/mod.rs
-
-      - name: Patch winit to continue without XIM
-        run: |
-          python3 <<'PY'
-          from pathlib import Path
-
-          path = Path(
-              "third_party/winit/src/platform_impl/linux/x11/ime/mod.rs"
-          )
-          text = path.read_text(encoding="utf-8")
-
-          old = '''        } else {
-                      Err(ImeCreationError::OpenFailure(inner.potential_input_methods))
-                  }
-          '''
-
-          new = '''        } else {
-                      eprintln!(
-                          "H700: XIM unavailable; continuing without an input method: {:#?}",
-                          inner.potential_input_methods
-                      );
-
-                      inner.is_destroyed = true;
-                      Ok(Ime { xconn, inner })
-                  }
-          '''
-
-          if old not in text:
-              print("ERRO: trecho esperado do Ime::new não foi encontrado.")
-              position = text.find("ImeCreationError::OpenFailure")
-              if position >= 0:
-                  print(text[max(0, position - 500):position + 500])
-              raise SystemExit(1)
-
-          path.write_text(text.replace(old, new, 1), encoding="utf-8")
-          print("OK: winit agora continua sem XIM.")
-          PY
-
-      - name: Add local winit Cargo patch
-        run: |
-          python3 <<'PY'
-          from pathlib import Path
-
-          cargo = Path("Cargo.toml")
-          text = cargo.read_text(encoding="utf-8")
-          patch_line = 'winit = { path = "third_party/winit" }'
-
-          if patch_line in text:
-              print("Patch local do winit já presente.")
-          elif "[patch.crates-io]" in text:
-              text = text.replace(
-                  "[patch.crates-io]",
-                  "[patch.crates-io]\n" + patch_line,
-                  1,
-              )
-              cargo.write_text(text, encoding="utf-8")
-          else:
-              text = (
-                  text.rstrip()
-                  + "\n\n[patch.crates-io]\n"
-                  + patch_line
-                  + "\n"
-              )
-              cargo.write_text(text, encoding="utf-8")
-
-          print("Cargo.toml atualizado.")
-          PY
-
-      - name: Verify local winit
-        run: |
-          . "$HOME/.cargo/env"
-
-          cargo tree -i winit | head -n 40
-
-          if ! cargo tree -i winit | grep -q "third_party/winit"; then
-            echo "ERRO: a cópia local do winit não foi selecionada."
-            exit 1
-          fi
 
       - name: Build Ruffle
         run: |
@@ -293,7 +196,7 @@ jobs:
             out/libs/libblkid.so.*
 
           cp /tmp/ruffle_revision.txt out/revision.txt
-          echo "winit-0.27.5-no-xim-recursive-libs" > out/patch.txt
+          echo "current-branch-h700-adapter-diagnostic-recursive-libs" > out/patch.txt
 
           file out/ruffle | tee out/info.txt
           ldd out/ruffle | tee -a out/info.txt || true
@@ -326,5 +229,5 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ruffle-h700-2023-no-xim-recursive-libs
+          name: ruffle-h700-current-branch-diagnostic
           path: out/
