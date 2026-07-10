@@ -62,70 +62,164 @@ jobs:
           . "$HOME/.cargo/env"
           cargo fetch
 
-      - name: Show winit XKB source
-        run: |
-          . "$HOME/.cargo/env"
-
-          XKB_FILE="$(grep -R -l \
-            'set_keymap_from_x11' \
-            "$HOME/.cargo/registry/src"/*/winit-*/src \
-            2>/dev/null \
-            | head -n 1)"
-
-          if [ -z "$XKB_FILE" ] || [ ! -f "$XKB_FILE" ]; then
-            echo "ERRO: arquivo XKB do winit não encontrado."
-            echo "Procurando ocorrências disponíveis:"
-            find "$HOME/.cargo/registry/src" -type f \
-              -path '*/winit-*/src/*.rs' \
-              -exec grep -l 'set_keymap_from_x11' {} \; \
-              2>/dev/null || true
-            exit 1
-          fi
-
-          echo "XKB_FILE=$XKB_FILE"
-          echo "$XKB_FILE" > /tmp/winit_xkb_file.txt
-
-          echo
-          echo "=== Funções XKB relevantes ==="
-          grep -n -C 35 \
-            -e 'fn from_x11_xkb' \
-            -e 'fn set_keymap_from_x11' \
-            -e 'fn set_keymap_from_names' \
-            -e 'xkb_x11_keymap_new_from_device' \
-            "$XKB_FILE" || true
-
-          echo
-          echo "=== Versão do winit ==="
-          WINIT_CARGO="$(dirname "$(dirname "$(dirname "$(dirname "$XKB_FILE")")")")/Cargo.toml"
-          if [ -f "$WINIT_CARGO" ]; then
-            grep -n -E '^(name|version) = ' "$WINIT_CARGO" | head -n 4
-          fi
-
-      - name: Build native crash tracer
+      - name: Build native crash tracer and XKB fallback shim
         run: |
           cat > /tmp/segvtrace.c <<'EOF'
           #define _GNU_SOURCE
+          #include <dlfcn.h>
           #include <execinfo.h>
           #include <signal.h>
+          #include <stdint.h>
           #include <stdio.h>
           #include <stdlib.h>
           #include <string.h>
           #include <unistd.h>
 
-          static void crash_handler(int sig, siginfo_t *info, void *context) {
+          struct xkb_context;
+          struct xkb_keymap;
+          struct xkb_state;
+          struct xkb_rule_names;
+
+          typedef struct xkb_keymap *(*keymap_from_names_fn)(
+              struct xkb_context *,
+              const struct xkb_rule_names *,
+              int
+          );
+
+          typedef struct xkb_state *(*state_new_fn)(
+              struct xkb_keymap *
+          );
+
+          /*
+           * H700 workaround:
+           * WestonPack's libxkbcommon-x11 crashes inside
+           * xkb_x11_keymap_new_from_device(). Intercept that function and
+           * build a generic keymap directly through libxkbcommon instead.
+           */
+          struct xkb_keymap *xkb_x11_keymap_new_from_device(
+              struct xkb_context *context,
+              void *connection,
+              int32_t device_id,
+              int flags
+          ) {
+              (void)connection;
+              (void)device_id;
+
+              dprintf(
+                  STDERR_FILENO,
+                  "H700: intercepted xkb_x11_keymap_new_from_device; "
+                  "using generic XKB keymap.\n"
+              );
+
+              keymap_from_names_fn create_keymap =
+                  (keymap_from_names_fn)dlsym(
+                      RTLD_NEXT,
+                      "xkb_keymap_new_from_names"
+                  );
+
+              if (!create_keymap) {
+                  dprintf(
+                      STDERR_FILENO,
+                      "H700: xkb_keymap_new_from_names not found: %s\n",
+                      dlerror()
+                  );
+                  return NULL;
+              }
+
+              struct xkb_keymap *keymap =
+                  create_keymap(context, NULL, flags);
+
+              dprintf(
+                  STDERR_FILENO,
+                  "H700: generic keymap result=%p\n",
+                  (void *)keymap
+              );
+
+              return keymap;
+          }
+
+          /*
+           * Avoid the same broken X11/device path when winit creates the
+           * keyboard state. A normal state can be created from the keymap.
+           */
+          struct xkb_state *xkb_x11_state_new_from_device(
+              struct xkb_keymap *keymap,
+              void *connection,
+              int32_t device_id
+          ) {
+              (void)connection;
+              (void)device_id;
+
+              dprintf(
+                  STDERR_FILENO,
+                  "H700: intercepted xkb_x11_state_new_from_device; "
+                  "using xkb_state_new.\n"
+              );
+
+              state_new_fn create_state =
+                  (state_new_fn)dlsym(RTLD_NEXT, "xkb_state_new");
+
+              if (!create_state) {
+                  dprintf(
+                      STDERR_FILENO,
+                      "H700: xkb_state_new not found: %s\n",
+                      dlerror()
+                  );
+                  return NULL;
+              }
+
+              struct xkb_state *state = create_state(keymap);
+
+              dprintf(
+                  STDERR_FILENO,
+                  "H700: generic state result=%p\n",
+                  (void *)state
+              );
+
+              return state;
+          }
+
+          static void crash_handler(
+              int sig,
+              siginfo_t *info,
+              void *context
+          ) {
               (void)context;
 
               const char *name = strsignal(sig);
-              dprintf(STDERR_FILENO, "\n========== H700 NATIVE CRASH ==========\n");
-              dprintf(STDERR_FILENO, "Signal: %d (%s)\n", sig, name ? name : "unknown");
-              dprintf(STDERR_FILENO, "Fault address: %p\n", info ? info->si_addr : NULL);
+              dprintf(
+                  STDERR_FILENO,
+                  "\n========== H700 NATIVE CRASH ==========\n"
+              );
+              dprintf(
+                  STDERR_FILENO,
+                  "Signal: %d (%s)\n",
+                  sig,
+                  name ? name : "unknown"
+              );
+              dprintf(
+                  STDERR_FILENO,
+                  "Fault address: %p\n",
+                  info ? info->si_addr : NULL
+              );
 
               void *frames[128];
               int count = backtrace(frames, 128);
-              dprintf(STDERR_FILENO, "Backtrace frames: %d\n", count);
-              backtrace_symbols_fd(frames, count, STDERR_FILENO);
+              dprintf(
+                  STDERR_FILENO,
+                  "Backtrace frames: %d\n",
+                  count
+              );
+              backtrace_symbols_fd(
+                  frames,
+                  count,
+                  STDERR_FILENO
+              );
 
-              dprintf(STDERR_FILENO, "=======================================\n");
+              dprintf(
+                  STDERR_FILENO,
+                  "=======================================\n"
+              );
               fsync(STDERR_FILENO);
 
               signal(sig, SIG_DFL);
@@ -133,7 +227,7 @@ jobs:
           }
 
           __attribute__((constructor))
-          static void install_crash_handler(void) {
+          static void install_h700_shims(void) {
               struct sigaction action;
               memset(&action, 0, sizeof(action));
               action.sa_sigaction = crash_handler;
@@ -146,7 +240,10 @@ jobs:
               sigaction(SIGILL, &action, NULL);
               sigaction(SIGFPE, &action, NULL);
 
-              dprintf(STDERR_FILENO, "H700: native crash tracer installed.\n");
+              dprintf(
+                  STDERR_FILENO,
+                  "H700: native crash tracer and XKB shim installed.\n"
+              );
           }
           EOF
 
@@ -156,6 +253,9 @@ jobs:
             -ldl
 
           file /tmp/libsegvtrace.so
+          nm -D /tmp/libsegvtrace.so \
+            | grep -E \
+              'xkb_x11_(keymap|state)_new_from_device'
           ldd /tmp/libsegvtrace.so || true
 
       - name: Build Ruffle debug
@@ -297,7 +397,7 @@ jobs:
             out/libs/libblkid.so.*
 
           cp /tmp/ruffle_revision.txt out/revision.txt
-          echo "debug-frame-pointers-native-crash-tracer-h700" > out/patch.txt
+          echo "debug-native-crash-tracer-xkb-fallback-shim-h700" > out/patch.txt
 
           file out/ruffle | tee out/info.txt
           ldd out/ruffle | tee -a out/info.txt || true
