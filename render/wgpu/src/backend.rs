@@ -1136,21 +1136,66 @@ pub async fn request_adapter_and_device(
     surface: Option<&wgpu::Surface<'static>>,
     power_preference: wgpu::PowerPreference,
 ) -> Result<(wgpu::Adapter, wgpu::Device, wgpu::Queue), Error> {
-    let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference,
-        compatible_surface: surface,
-        force_fallback_adapter: false,
-    }).await
-        .map_err(|_e| {
-            let names = get_backend_names(backend);
-            if names.is_empty() {
-                "Ruffle requires hardware acceleration, but no compatible graphics device was found (no backend provided?)".to_string()
-            } else if cfg!(target_vendor = "apple") {
-                "Ruffle does not support OpenGL on macOS/iOS.".to_string()
-            } else {
-                format!("Ruffle requires hardware acceleration, but no compatible graphics device was found supporting {}", format_list(&names, "or"))
-            }
-        })?;
+    eprintln!("========== H700 ADAPTER ENUMERATION ==========");
+
+    for candidate in instance.enumerate_adapters(backend) {
+        eprintln!("---------------------------------------------");
+        eprintln!("Adapter: {:?}", candidate.get_info());
+        eprintln!("Features: {:?}", candidate.features());
+        eprintln!("Limits: {:?}", candidate.limits());
+    }
+
+    eprintln!("==============================================");
+
+    let adapter = match instance
+        .request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference,
+            compatible_surface: surface,
+            force_fallback_adapter: false,
+        })
+        .await
+    {
+        Ok(adapter) => {
+            eprintln!("H700: adaptador normal selecionado.");
+            adapter
+        }
+        Err(normal_error) => {
+            eprintln!("H700: adaptador normal não encontrado.");
+            eprintln!("Erro: {:?}", normal_error);
+            eprintln!("H700: tentando adaptador fallback...");
+
+            instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::LowPower,
+                    compatible_surface: surface,
+                    force_fallback_adapter: true,
+                })
+                .await
+                .map_err(|fallback_error| {
+                    eprintln!("H700: adaptador fallback também falhou.");
+                    eprintln!("Erro fallback: {:?}", fallback_error);
+
+                    let names = get_backend_names(backend);
+
+                    if names.is_empty() {
+                        "Ruffle requires hardware acceleration, but no compatible graphics device was found (no backend provided?)".to_string()
+                    } else if cfg!(target_vendor = "apple") {
+                        "Ruffle does not support OpenGL on macOS/iOS.".to_string()
+                    } else {
+                        format!(
+                            "Ruffle requires hardware acceleration, but no compatible graphics device was found supporting {}",
+                            format_list(&names, "or")
+                        )
+                    }
+                })?
+        }
+    };
+
+    eprintln!("========== H700 SELECTED ADAPTER ==========");
+    eprintln!("Adapter: {:?}", adapter.get_info());
+    eprintln!("Features: {:?}", adapter.features());
+    eprintln!("Limits: {:?}", adapter.limits());
+    eprintln!("===========================================");
 
     match request_device(&adapter).await {
         Ok((device, queue)) => {
