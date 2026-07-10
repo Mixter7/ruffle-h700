@@ -491,15 +491,22 @@ impl ApplicationHandler<RuffleEvent> for App {
             let window = Arc::new(window);
             let font_database = self.font_database.clone();
 
-            let mut gui = GuiController::new(
+            let mut gui = match GuiController::new(
                 window.clone(),
                 event_loop_proxy.clone(),
                 preferences.clone(),
                 &font_database,
                 movie_url.clone(),
                 no_gui,
-            )
-            .expect("GUI controller should be created");
+            ) {
+                Ok(gui) => gui,
+                Err(error) => {
+                    eprintln!("========== H700 GUI CONTROLLER ERROR ==========");
+                    eprintln!("{error:#?}");
+                    eprintln!("================================================");
+                    panic!("GUI controller could not be created: {error:#?}");
+                }
+            };
 
             let mut player = PlayerController::new(
                 event_loop_proxy.clone(),
