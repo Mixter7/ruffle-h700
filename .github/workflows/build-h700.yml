@@ -1,4 +1,4 @@
-name: Build Ruffle 2023 H700 Patched
+name: Build Ruffle 2023 H700
 
 on:
   workflow_dispatch:
@@ -15,7 +15,7 @@ jobs:
         run: |
           apt update
           apt install -y \
-            git curl ca-certificates build-essential pkg-config python3 \
+            git curl ca-certificates build-essential pkg-config \
             libssl-dev libasound2-dev libudev-dev \
             libfontconfig1-dev libxcb1-dev zlib1g-dev \
             libglib2.0-dev libgtk-3-dev libgdk-pixbuf2.0-dev \
@@ -56,93 +56,6 @@ jobs:
           cargo metadata --no-deps --format-version 1 \
             | grep -o '"name":"[^"]*"' \
             | sort -u || true
-
-      - name: Patch winit X11 input method
-        run: |
-          . "$HOME/.cargo/env"
-
-          cargo fetch
-
-          WINIT_DIR="$(find "$HOME/.cargo/registry/src" \
-            -type d \
-            -name 'winit-0.27.5' \
-            | head -n 1)"
-
-          if [ -z "$WINIT_DIR" ]; then
-            echo "ERRO: winit 0.27.5 não foi encontrado."
-            exit 1
-          fi
-
-          WINIT_FILE="$WINIT_DIR/src/platform_impl/linux/x11/mod.rs"
-
-          if [ ! -f "$WINIT_FILE" ]; then
-            echo "ERRO: arquivo X11 do winit não encontrado."
-            exit 1
-          fi
-
-          echo "Arquivo do winit:"
-          echo "$WINIT_FILE"
-
-          cp "$WINIT_FILE" "$WINIT_FILE.original"
-
-          python3 - "$WINIT_FILE" <<'PY'
-          import pathlib
-          import re
-          import sys
-
-          path = pathlib.Path(sys.argv[1])
-          text = path.read_text()
-
-          print("Ocorrências encontradas antes do patch:")
-          for number, line in enumerate(text.splitlines(), 1):
-              if "setlocale" in line or "Failed to open input method" in line:
-                  print(f"{number}: {line}")
-
-          original = text
-
-          # Em ambientes X11 mínimos, usar a locale do sistema pode causar
-          # falha na abertura do XIM. Forçamos a locale C diretamente.
-          replacements = [
-              (
-                  r'libc::setlocale\(\s*libc::LC_CTYPE\s*,\s*[^;]+?\);',
-                  'libc::setlocale(libc::LC_CTYPE, b"C\\\\0".as_ptr().cast());'
-              ),
-              (
-                  r'\(xlib\.XSetLocaleModifiers\)\(\s*std::ptr::null\(\)\s*\)',
-                  '(xlib.XSetLocaleModifiers)(b"@im=none\\\\0".as_ptr().cast())'
-              ),
-              (
-                  r'\(xlib\.XSetLocaleModifiers\)\(\s*ptr::null\(\)\s*\)',
-                  '(xlib.XSetLocaleModifiers)(b"@im=none\\\\0".as_ptr().cast())'
-              ),
-          ]
-
-          for pattern, replacement in replacements:
-              text, count = re.subn(
-                  pattern,
-                  replacement,
-                  text,
-                  count=1,
-                  flags=re.DOTALL,
-              )
-              if count:
-                  print(f"Patch aplicado ao padrão: {pattern}")
-
-          if text == original:
-              print("Nenhum padrão automático foi localizado.")
-              print("Trecho próximo ao panic:")
-              position = text.find("Failed to open input method")
-              if position >= 0:
-                  print(text[max(0, position - 900):position + 500])
-              raise SystemExit(1)
-
-          path.write_text(text)
-          print("Patch X11/XIM aplicado com sucesso.")
-          PY
-
-          echo "Trechos após o patch:"
-          grep -n -C 4 "setlocale\|XSetLocaleModifiers\|Failed to open input method" \
-            "$WINIT_FILE" || true
 
       - name: Build Ruffle
         run: |
@@ -199,31 +112,23 @@ jobs:
             exit 1
           fi
 
-          copy_safe_library() {
-            lib="$1"
-
-            if [ ! -f "$lib" ]; then
-              return
-            fi
-
-            case "$(basename "$lib")" in
-              libc.so.*|libpthread.so.*|libdl.so.*|librt.so.*|libm.so.*|libgcc_s.so.*|ld-linux-*.so.*|libmount.so.*|libblkid.so.*)
-                echo "Ignorando biblioteca do sistema: $lib"
-                ;;
-              *)
-                echo "Copiando: $lib"
-                cp -L "$lib" out/libs/ 2>/dev/null || true
-                ;;
-            esac
-          }
-
           echo "Copiando GTK e dependências diretas..."
 
           ldd "$GTK_LIB" \
             | awk '/=> \// {print $3}' \
             | sort -u \
             | while read -r lib; do
-                copy_safe_library "$lib"
+                if [ -f "$lib" ]; then
+                  case "$(basename "$lib")" in
+                    libc.so.*|libpthread.so.*|libdl.so.*|librt.so.*|libm.so.*|libgcc_s.so.*|ld-linux-*.so.*|libmount.so.*|libblkid.so.*)
+                      echo "Ignorando biblioteca do sistema: $lib"
+                      ;;
+                    *)
+                      echo "Copiando: $lib"
+                      cp -L "$lib" out/libs/ 2>/dev/null || true
+                      ;;
+                  esac
+                fi
               done
 
           cp -L "$GTK_LIB" out/libs/
@@ -234,7 +139,17 @@ jobs:
             | awk '/=> \// {print $3}' \
             | sort -u \
             | while read -r lib; do
-                copy_safe_library "$lib"
+                if [ -f "$lib" ]; then
+                  case "$(basename "$lib")" in
+                    libc.so.*|libpthread.so.*|libdl.so.*|librt.so.*|libm.so.*|libgcc_s.so.*|ld-linux-*.so.*|libmount.so.*|libblkid.so.*)
+                      echo "Ignorando biblioteca do sistema: $lib"
+                      ;;
+                    *)
+                      echo "Copiando: $lib"
+                      cp -L "$lib" out/libs/ 2>/dev/null || true
+                      ;;
+                  esac
+                fi
               done
 
           rm -f \
@@ -249,7 +164,6 @@ jobs:
             out/libs/libblkid.so.*
 
           cp /tmp/ruffle_revision.txt out/revision.txt
-          echo "winit-0.27.5-xim-patched" > out/patch.txt
 
           file out/ruffle | tee out/info.txt
           ldd out/ruffle | tee -a out/info.txt || true
@@ -258,7 +172,6 @@ jobs:
           ls -lh out/libs
 
           echo "Verificando bibliotecas proibidas:"
-
           if find out/libs -maxdepth 1 -type f \
             \( -name 'libc.so.*' \
             -o -name 'libpthread.so.*' \
@@ -277,5 +190,5 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ruffle-h700-2023-winit-patched
+          name: ruffle-h700-2023-gtk-filtered
           path: out/
