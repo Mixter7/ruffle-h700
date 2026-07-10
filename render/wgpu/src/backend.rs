@@ -1152,8 +1152,27 @@ pub async fn request_adapter_and_device(
             }
         })?;
 
-    let (device, queue) = request_device(&adapter).await?;
-    Ok((adapter, device, queue))
+    match request_device(&adapter).await {
+        Ok((device, queue)) => {
+            eprintln!("========== GPU INFO ==========");
+            eprintln!("Adapter: {:?}", adapter.get_info());
+            eprintln!("Features: {:?}", adapter.features());
+            eprintln!("Limits: {:?}", adapter.limits());
+            eprintln!("==============================");
+
+            Ok((adapter, device, queue))
+        }
+        Err(e) => {
+            eprintln!("========== DEVICE ERROR ==========");
+            eprintln!("Adapter: {:?}", adapter.get_info());
+            eprintln!("Features: {:?}", adapter.features());
+            eprintln!("Limits: {:?}", adapter.limits());
+            eprintln!("Device Error: {:?}", e);
+            eprintln!("==================================");
+
+            Err(Box::new(e))
+        }
+    }
 }
 
 // We try to request the highest limits we can get away with
