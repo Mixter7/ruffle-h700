@@ -1,12 +1,7 @@
-name: Build Old Ruffle H700
+name: Build Ruffle 2023 H700
 
 on:
   workflow_dispatch:
-    inputs:
-      build_date:
-        description: "Data da versão do Ruffle"
-        required: true
-        default: "2023-01-15"
 
 jobs:
   build:
@@ -23,6 +18,8 @@ jobs:
             git curl ca-certificates build-essential pkg-config \
             libssl-dev libasound2-dev libudev-dev \
             libfontconfig1-dev libxcb1-dev zlib1g-dev \
+            libglib2.0-dev libgtk-3-dev libgdk-pixbuf2.0-dev \
+            libpango1.0-dev libcairo2-dev \
             libc-bin file default-jre-headless
 
       - name: Checkout repository
@@ -30,24 +27,16 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Select old Ruffle commit
+      - name: Select Ruffle 2023 commit
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git fetch origin --tags --force
+          git checkout 7d23495
 
-          OLD_COMMIT="$(git rev-list -n 1 \
-            --before="${{ inputs.build_date }} 23:59:59" \
-            origin/master)"
-
-          if [ -z "$OLD_COMMIT" ]; then
-            echo "Não foi encontrado um commit anterior à data informada."
-            exit 1
-          fi
-
-          echo "Commit selecionado: $OLD_COMMIT"
-          git checkout "$OLD_COMMIT"
-
-          echo "$OLD_COMMIT" > /tmp/ruffle_revision.txt
+          echo "Commit selecionado:"
           git log -1 --format="%H%n%ci%n%s"
+
+          echo "7d23495" > /tmp/ruffle_revision.txt
 
       - name: Install Rust
         run: |
@@ -56,12 +45,7 @@ jobs:
 
           . "$HOME/.cargo/env"
 
-          if [ -f rust-toolchain.toml ] || [ -f rust-toolchain ]; then
-            rustup show
-          else
-            rustup default stable
-          fi
-
+          rustup show
           rustc --version
           cargo --version
 
@@ -73,7 +57,7 @@ jobs:
             | grep -o '"name":"[^"]*"' \
             | sort -u || true
 
-      - name: Build old Ruffle
+      - name: Build Ruffle
         run: |
           . "$HOME/.cargo/env"
 
@@ -86,7 +70,7 @@ jobs:
             cargo build --release --package ruffle_desktop_native
 
           else
-            echo "Pacote desktop não identificado; tentando workspace."
+            echo "Pacote desktop não identificado; tentando o workspace."
             cargo build --release
           fi
 
@@ -121,13 +105,11 @@ jobs:
 
           cp /tmp/ruffle_revision.txt out/revision.txt
 
-          echo "${{ inputs.build_date }}" > out/build-date.txt
-
           file out/ruffle | tee out/info.txt
           ldd out/ruffle | tee -a out/info.txt || true
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ruffle-h700-${{ inputs.build_date }}
+          name: ruffle-h700-2023-01-28
           path: out/
