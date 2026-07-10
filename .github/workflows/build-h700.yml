@@ -1,4 +1,4 @@
-name: Build Ruffle 2023 H700 No XIM
+name: Build Ruffle 2023 H700 Recursive Libs
 
 on:
   workflow_dispatch:
@@ -109,9 +109,6 @@ jobs:
           print("OK: winit agora continua sem XIM.")
           PY
 
-          grep -n -C 10 "H700: XIM unavailable" \
-            third_party/winit/src/platform_impl/linux/x11/ime/mod.rs
-
       - name: Add local winit Cargo patch
         run: |
           python3 <<'PY'
@@ -142,8 +139,6 @@ jobs:
           print("Cargo.toml atualizado.")
           PY
 
-          tail -n 20 Cargo.toml
-
       - name: Verify local winit
         run: |
           . "$HOME/.cargo/env"
@@ -172,8 +167,10 @@ jobs:
             cargo build --release
           fi
 
-      - name: Prepare artifact
+      - name: Prepare artifact with recursive libraries
         run: |
+          set -eu
+
           mkdir -p out/libs
 
           RUFFLE_FILE="$(find target/release -maxdepth 2 \
@@ -191,52 +188,89 @@ jobs:
           cp "$RUFFLE_FILE" out/ruffle
           chmod +x out/ruffle
 
-          cp -L /usr/lib/aarch64-linux-gnu/libssl.so.1.1 \
-            out/libs/ 2>/dev/null || true
+          : > /tmp/lib_queue.txt
+          : > /tmp/lib_seen.txt
 
-          cp -L /usr/lib/aarch64-linux-gnu/libcrypto.so.1.1 \
-            out/libs/ 2>/dev/null || true
+          enqueue() {
+            candidate="$1"
 
-          copy_safe_library() {
-            lib="$1"
-
-            if [ ! -f "$lib" ]; then
-              return
+            if [ -f "$candidate" ] && ! grep -Fxq "$candidate" /tmp/lib_seen.txt; then
+              echo "$candidate" >> /tmp/lib_queue.txt
             fi
+          }
 
-            case "$(basename "$lib")" in
+          is_forbidden_system_lib() {
+            base="$(basename "$1")"
+
+            case "$base" in
               libc.so.*|libpthread.so.*|libdl.so.*|librt.so.*|libm.so.*|libgcc_s.so.*|ld-linux-*.so.*|libmount.so.*|libblkid.so.*)
-                echo "Ignorando biblioteca do sistema: $lib"
+                return 0
                 ;;
               *)
-                echo "Copiando: $lib"
-                cp -L "$lib" out/libs/ 2>/dev/null || true
+                return 1
                 ;;
             esac
           }
 
-          GTK_LIB="/usr/lib/aarch64-linux-gnu/libgtk-3.so.0"
+          collect_ldd_paths() {
+            binary="$1"
 
-          if [ ! -f "$GTK_LIB" ]; then
-            echo "ERRO: libgtk-3.so.0 não encontrada."
-            exit 1
-          fi
+            ldd "$binary" 2>/dev/null \
+              | awk '
+                  /=> \/.*/ { print $3 }
+                  /^[[:space:]]*\/.*\(/ { print $1 }
+                ' \
+              | while IFS= read -r dependency; do
+                  [ -n "$dependency" ] && enqueue "$dependency"
+                done
+          }
 
-          ldd "$GTK_LIB" \
-            | awk '/=> \\// {print $3}' \
-            | sort -u \
-            | while read -r lib; do
-                copy_safe_library "$lib"
-              done
+          collect_ldd_paths "$RUFFLE_FILE"
 
-          cp -L "$GTK_LIB" out/libs/
+          for seed in \
+            /usr/lib/aarch64-linux-gnu/libgtk-3.so.0 \
+            /usr/lib/aarch64-linux-gnu/libgdk-3.so.0 \
+            /usr/lib/aarch64-linux-gnu/libgdk_pixbuf-2.0.so.0 \
+            /usr/lib/aarch64-linux-gnu/libgio-2.0.so.0 \
+            /usr/lib/aarch64-linux-gnu/libgmodule-2.0.so.0 \
+            /usr/lib/aarch64-linux-gnu/libssl.so.1.1 \
+            /usr/lib/aarch64-linux-gnu/libcrypto.so.1.1
+          do
+            enqueue "$seed"
+          done
 
-          ldd out/ruffle \
-            | awk '/=> \\// {print $3}' \
-            | sort -u \
-            | while read -r lib; do
-                copy_safe_library "$lib"
-              done
+          index=1
+
+          while :; do
+            current="$(sed -n "${index}p" /tmp/lib_queue.txt)"
+
+            if [ -z "$current" ]; then
+              break
+            fi
+
+            index=$((index + 1))
+
+            if grep -Fxq "$current" /tmp/lib_seen.txt; then
+              continue
+            fi
+
+            echo "$current" >> /tmp/lib_seen.txt
+
+            if is_forbidden_system_lib "$current"; then
+              echo "Ignorando biblioteca crítica do sistema: $current"
+              continue
+            fi
+
+            if [ ! -f "$current" ]; then
+              echo "AVISO: biblioteca não encontrada: $current"
+              continue
+            fi
+
+            echo "Copiando: $current"
+            cp -L "$current" "out/libs/$(basename "$current")"
+
+            collect_ldd_paths "$current"
+          done
 
           rm -f \
             out/libs/libc.so.* \
@@ -250,16 +284,38 @@ jobs:
             out/libs/libblkid.so.*
 
           cp /tmp/ruffle_revision.txt out/revision.txt
-          echo "winit-0.27.5-no-xim" > out/patch.txt
+          echo "winit-0.27.5-no-xim-recursive-libs" > out/patch.txt
 
           file out/ruffle | tee out/info.txt
           ldd out/ruffle | tee -a out/info.txt || true
 
+          echo
           echo "Bibliotecas empacotadas:"
           ls -lh out/libs
+
+          echo
+          echo "Verificando bibliotecas essenciais:"
+
+          for required in \
+            libgtk-3.so.0 \
+            libgdk-3.so.0 \
+            libssl.so.1.1 \
+            libcrypto.so.1.1
+          do
+            if [ ! -f "out/libs/$required" ]; then
+              echo "ERRO: $required não foi empacotada."
+              exit 1
+            fi
+
+            echo "OK: $required"
+          done
+
+          echo
+          echo "Total de bibliotecas:"
+          find out/libs -maxdepth 1 -type f | wc -l
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ruffle-h700-2023-no-xim
+          name: ruffle-h700-2023-no-xim-recursive-libs
           path: out/
