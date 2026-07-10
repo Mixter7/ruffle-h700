@@ -1,4 +1,4 @@
-name: Build Ruffle 2023 H700 Recursive Libs
+name: Build Ruffle H700 Current Branch
 
 on:
   workflow_dispatch:
@@ -27,15 +27,24 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Select Ruffle 2023 commit
+      - name: Use current branch code
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git fetch origin --tags --force
-          git checkout 7d23495
 
-          echo "Commit selecionado:"
+          echo "Código que será compilado:"
           git log -1 --format="%H%n%ci%n%s"
-          echo "7d23495" > /tmp/ruffle_revision.txt
+
+          git rev-parse HEAD > /tmp/ruffle_revision.txt
+
+          echo "Verificando alteração do backend H700..."
+
+          if grep -q "H700 ADAPTER ENUMERATION" render/wgpu/src/backend.rs; then
+            echo "OK: patch de diagnóstico encontrado."
+          else
+            echo "ERRO: o backend.rs modificado não foi encontrado."
+            echo "Confirme que você salvou e fez commit da alteração."
+            exit 1
+          fi
 
       - name: Install Rust
         run: |
