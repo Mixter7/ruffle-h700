@@ -1,4 +1,4 @@
-name: Build Ruffle H700 Current Branch
+name: Build Ruffle H700 Debug Crash Trace
 
 on:
   workflow_dispatch:
@@ -62,30 +62,88 @@ jobs:
           . "$HOME/.cargo/env"
           cargo fetch
 
-      - name: Build Ruffle
+      - name: Build native crash tracer
+        run: |
+          cat > /tmp/segvtrace.c <<'EOF'
+          #define _GNU_SOURCE
+          #include <execinfo.h>
+          #include <signal.h>
+          #include <stdio.h>
+          #include <stdlib.h>
+          #include <string.h>
+          #include <unistd.h>
+
+          static void crash_handler(int sig, siginfo_t *info, void *context) {
+              (void)context;
+
+              const char *name = strsignal(sig);
+              dprintf(STDERR_FILENO, "\n========== H700 NATIVE CRASH ==========\n");
+              dprintf(STDERR_FILENO, "Signal: %d (%s)\n", sig, name ? name : "unknown");
+              dprintf(STDERR_FILENO, "Fault address: %p\n", info ? info->si_addr : NULL);
+
+              void *frames[128];
+              int count = backtrace(frames, 128);
+              dprintf(STDERR_FILENO, "Backtrace frames: %d\n", count);
+              backtrace_symbols_fd(frames, count, STDERR_FILENO);
+
+              dprintf(STDERR_FILENO, "=======================================\n");
+              fsync(STDERR_FILENO);
+
+              signal(sig, SIG_DFL);
+              raise(sig);
+          }
+
+          __attribute__((constructor))
+          static void install_crash_handler(void) {
+              struct sigaction action;
+              memset(&action, 0, sizeof(action));
+              action.sa_sigaction = crash_handler;
+              sigemptyset(&action.sa_mask);
+              action.sa_flags = SA_SIGINFO | SA_RESETHAND;
+
+              sigaction(SIGSEGV, &action, NULL);
+              sigaction(SIGABRT, &action, NULL);
+              sigaction(SIGBUS, &action, NULL);
+              sigaction(SIGILL, &action, NULL);
+              sigaction(SIGFPE, &action, NULL);
+
+              dprintf(STDERR_FILENO, "H700: native crash tracer installed.\n");
+          }
+          EOF
+
+          gcc -shared -fPIC -O0 -g \
+            -o /tmp/libsegvtrace.so \
+            /tmp/segvtrace.c \
+            -ldl
+
+          file /tmp/libsegvtrace.so
+          ldd /tmp/libsegvtrace.so || true
+
+      - name: Build Ruffle debug
         run: |
           . "$HOME/.cargo/env"
 
-          export RUSTFLAGS="-A dangerous_implicit_autorefs"
+          export RUSTFLAGS="-C force-frame-pointers=yes -C debuginfo=2 -C link-arg=-rdynamic -A dangerous_implicit_autorefs"
+          export CARGO_PROFILE_DEV_DEBUG=2
 
           if cargo metadata --no-deps --format-version 1 \
             | grep -q '"name":"ruffle_desktop"'; then
-            cargo build --release --package ruffle_desktop
+            cargo build --package ruffle_desktop
           elif cargo metadata --no-deps --format-version 1 \
             | grep -q '"name":"ruffle_desktop_native"'; then
-            cargo build --release --package ruffle_desktop_native
+            cargo build --package ruffle_desktop_native
           else
             echo "Pacote desktop não identificado; tentando workspace."
-            cargo build --release
+            cargo build
           fi
 
-      - name: Prepare artifact with recursive libraries
+      - name: Prepare debug artifact with recursive libraries
         run: |
           set -eu
 
           mkdir -p out/libs
 
-          RUFFLE_FILE="$(find target/release -maxdepth 2 \
+          RUFFLE_FILE="$(find target/debug -maxdepth 2 \
             -type f -executable \
             \( -name 'ruffle' \
             -o -name 'ruffle_desktop' \
@@ -93,12 +151,15 @@ jobs:
             | head -n 1)"
 
           if [ -z "$RUFFLE_FILE" ]; then
-            echo "ERRO: executável do Ruffle não encontrado."
+            echo "ERRO: executável debug do Ruffle não encontrado."
             exit 1
           fi
 
           cp "$RUFFLE_FILE" out/ruffle
           chmod +x out/ruffle
+
+          cp /tmp/libsegvtrace.so out/libsegvtrace.so
+          chmod +x out/libsegvtrace.so
 
           : > /tmp/lib_queue.txt
           : > /tmp/lib_seen.txt
@@ -138,6 +199,7 @@ jobs:
           }
 
           collect_ldd_paths "$RUFFLE_FILE"
+          collect_ldd_paths /tmp/libsegvtrace.so
 
           for seed in \
             /usr/lib/aarch64-linux-gnu/libgtk-3.so.0 \
@@ -196,38 +258,18 @@ jobs:
             out/libs/libblkid.so.*
 
           cp /tmp/ruffle_revision.txt out/revision.txt
-          echo "current-branch-h700-adapter-diagnostic-recursive-libs" > out/patch.txt
+          echo "debug-frame-pointers-native-crash-tracer-h700" > out/patch.txt
 
           file out/ruffle | tee out/info.txt
           ldd out/ruffle | tee -a out/info.txt || true
 
           echo
-          echo "Bibliotecas empacotadas:"
+          echo "Arquivos do artifact:"
+          ls -lh out
           ls -lh out/libs
-
-          echo
-          echo "Verificando bibliotecas essenciais:"
-
-          for required in \
-            libgtk-3.so.0 \
-            libgdk-3.so.0 \
-            libssl.so.1.1 \
-            libcrypto.so.1.1
-          do
-            if [ ! -f "out/libs/$required" ]; then
-              echo "ERRO: $required não foi empacotada."
-              exit 1
-            fi
-
-            echo "OK: $required"
-          done
-
-          echo
-          echo "Total de bibliotecas:"
-          find out/libs -maxdepth 1 -type f | wc -l
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ruffle-h700-current-branch-diagnostic
+          name: ruffle-h700-debug-crash-trace
           path: out/
