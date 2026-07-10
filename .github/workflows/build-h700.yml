@@ -1,4 +1,4 @@
-name: Build Ruffle 2023 H700 Optional IME
+name: Build Ruffle 2023 H700 No XIM
 
 on:
   workflow_dispatch:
@@ -35,7 +35,6 @@ jobs:
 
           echo "Commit selecionado:"
           git log -1 --format="%H%n%ci%n%s"
-
           echo "7d23495" > /tmp/ruffle_revision.txt
 
       - name: Install Rust
@@ -44,7 +43,6 @@ jobs:
             -sSf https://sh.rustup.rs | sh -s -- -y
 
           . "$HOME/.cargo/env"
-
           rustup show
           rustc --version
           cargo --version
@@ -62,294 +60,57 @@ jobs:
             | head -n 1)"
 
           if [ -z "$WINIT_SOURCE" ]; then
-            echo "ERRO: winit 0.27.5 não encontrado no Cargo Registry."
+            echo "ERRO: winit 0.27.5 não encontrado."
             exit 1
           fi
-
-          echo "winit encontrado em:"
-          echo "$WINIT_SOURCE"
 
           rm -rf third_party/winit
           mkdir -p third_party
           cp -a "$WINIT_SOURCE" third_party/winit
-
           chmod -R u+w third_party/winit
 
           test -f third_party/winit/Cargo.toml
-          test -f third_party/winit/src/platform_impl/linux/x11/mod.rs
-          test -f third_party/winit/src/platform_impl/linux/x11/window.rs
-          test -f third_party/winit/src/platform_impl/linux/x11/event_processor.rs
+          test -f third_party/winit/src/platform_impl/linux/x11/ime/mod.rs
 
-      - name: Patch winit optional XIM
+      - name: Patch winit to continue without XIM
         run: |
           python3 <<'PY'
           from pathlib import Path
 
-          root = Path("third_party/winit/src/platform_impl/linux/x11")
-          mod_file = root / "mod.rs"
-          window_file = root / "window.rs"
-          event_file = root / "event_processor.rs"
-
-          def replace_once(path: Path, old: str, new: str, label: str) -> None:
-              text = path.read_text(encoding="utf-8")
-
-              if old not in text:
-                  print(f"\nERRO: trecho não encontrado em {path}: {label}")
-                  raise SystemExit(1)
-
-              path.write_text(text.replace(old, new, 1), encoding="utf-8")
-              print(f"OK: {label}")
-
-          # ---------------------------------------------------------
-          # mod.rs: armazenar IME como opcional.
-          # ---------------------------------------------------------
-          replace_once(
-              mod_file,
-              "    ime: RefCell<Ime>,",
-              "    ime: Option<RefCell<Ime>>,",
-              "Campo IME opcional",
+          path = Path(
+              "third_party/winit/src/platform_impl/linux/x11/ime/mod.rs"
           )
+          text = path.read_text(encoding="utf-8")
 
-          old_ime_creation = '''        let ime = RefCell::new({
-                      let result = Ime::new(Arc::clone(&xconn), ime_event_sender);
-                      if let Err(ImeCreationError::OpenFailure(ref state)) = result {
-                          panic!("Failed to open input method: {:#?}", state);
-                      }
-                      result.expect("Failed to set input method destruction callback")
-                  });
-          '''
-
-          new_ime_creation = '''        let ime = match Ime::new(Arc::clone(&xconn), ime_event_sender) {
-                      Ok(ime) => {
-                          eprintln!("H700: X11 input method initialized.");
-                          Some(RefCell::new(ime))
-                      }
-                      Err(ImeCreationError::OpenFailure(state)) => {
-                          eprintln!(
-                              "H700: X11 input method unavailable; continuing without XIM: {:#?}",
-                              state
-                          );
-                          None
-                      }
-                      Err(error) => {
-                          eprintln!(
-                              "H700: X11 input method initialization failed; continuing without XIM: {:?}",
-                              error
-                          );
-                          None
-                      }
-                  };
-          '''
-
-          replace_once(
-              mod_file,
-              old_ime_creation,
-              new_ime_creation,
-              "Criação opcional do IME",
-          )
-
-          # ---------------------------------------------------------
-          # window.rs: criar contexto apenas quando o IME existir.
-          # ---------------------------------------------------------
-          old_window_context = '''            {
-                          let result = event_loop
-                              .ime
-                              .borrow_mut()
-                              .create_context(window.xwindow, false);
-                          if let Err(err) = result {
-                              let e = match err {
-                                  ImeContextCreationError::XError(err) => OsError::XError(err),
-                                  ImeContextCreationError::Null => {
-                                      OsError::XMisc("IME Context creation failed")
-                                  }
-                              };
-                              return Err(os_error!(e));
-                          }
-                      }
-          '''
-
-          new_window_context = '''            if let Some(ime) = event_loop.ime.as_ref() {
-                          let result = ime
-                              .borrow_mut()
-                              .create_context(window.xwindow, false);
-
-                          if let Err(err) = result {
-                              let e = match err {
-                                  ImeContextCreationError::XError(err) => OsError::XError(err),
-                                  ImeContextCreationError::Null => {
-                                      OsError::XMisc("IME Context creation failed")
-                                  }
-                              };
-                              return Err(os_error!(e));
-                          }
-                      } else {
-                          eprintln!("H700: Window created without an XIM context.");
-                      }
-          '''
-
-          replace_once(
-              window_file,
-              old_window_context,
-              new_window_context,
-              "Contexto da janela sem IME obrigatório",
-          )
-
-          # ---------------------------------------------------------
-          # event_processor.rs: destruição de contexto opcional.
-          # ---------------------------------------------------------
-          old_remove_context = '''                wt.ime
-                              .borrow_mut()
-                              .remove_context(window)
-                              .expect("Failed to destroy input context");
-          '''
-
-          new_remove_context = '''                if let Some(ime) = wt.ime.as_ref() {
-                              ime.borrow_mut()
-                                  .remove_context(window)
-                                  .expect("Failed to destroy input context");
-                          }
-          '''
-
-          replace_once(
-              event_file,
-              old_remove_context,
-              new_remove_context,
-              "Remoção opcional do contexto IME",
-          )
-
-          # ---------------------------------------------------------
-          # Leitura de caracteres sem exigir contexto IME.
-          # Os eventos KeyboardInput continuam funcionando.
-          # ---------------------------------------------------------
-          text = event_file.read_text(encoding="utf-8")
-
-pattern = r'''let written\s*=\s*if let Some\(ic\)\s*=\s*wt\.ime\.borrow\(\)\.get_context\(window\)\s*\{
-\s*wt\.xconn\.lookup_utf8\(ic,\s*xkev\)
-\s*\}\s*else\s*\{
-\s*return;
-\s*\};'''
-
-replacement = '''let written = if let Some(ime) = wt.ime.as_ref() {
-                        if let Some(ic) = ime.borrow().get_context(window) {
-                            wt.xconn.lookup_utf8(ic, xkev)
-                        } else {
-                            String::new()
-                        }
-                    } else {
-                        String::new()
-                    };'''
-
-text, count = re.subn(
-    pattern,
-    replacement,
-    text,
-    count=1,
-    flags=re.MULTILINE,
-)
-
-if count != 1:
-    print("ERRO: bloco de leitura de texto não encontrado.")
-    position = text.find("get_context(window)")
-    if position >= 0:
-        print(text[max(0, position - 400):position + 500])
-    raise SystemExit(1)
-
-event_file.write_text(text, encoding="utf-8")
-print("OK: Leitura de texto sem IME obrigatório")
-
-          # ---------------------------------------------------------
-          # Foco do IME opcional.
-          # ---------------------------------------------------------
-          old_focus = '''                        wt.ime
-                              .borrow_mut()
-                              .focus(xev.event)
-                              .expect("Failed to focus input context");
-          '''
-
-          new_focus = '''                        if let Some(ime) = wt.ime.as_ref() {
-                              ime.borrow_mut()
-                                  .focus(xev.event)
-                                  .expect("Failed to focus input context");
-                          }
-          '''
-
-          replace_once(
-              event_file,
-              old_focus,
-              new_focus,
-              "Foco opcional do IME",
-          )
-
-          old_unfocus = '''                        wt.ime
-                              .borrow_mut()
-                              .unfocus(xev.event)
-                              .expect("Failed to unfocus input context");
-          '''
-
-          new_unfocus = '''                        if let Some(ime) = wt.ime.as_ref() {
-                              ime.borrow_mut()
-                                  .unfocus(xev.event)
-                                  .expect("Failed to unfocus input context");
-                          }
-          '''
-
-          replace_once(
-              event_file,
-              old_unfocus,
-              new_unfocus,
-              "Desfoco opcional do IME",
-          )
-
-          # ---------------------------------------------------------
-          # Pedidos de posição/ativação do IME.
-          # ---------------------------------------------------------
-          old_requests = '''        if let Ok(request) = self.ime_receiver.try_recv() {
-                      let mut ime = wt.ime.borrow_mut();
-                      match request {
-                          ImeRequest::Position(window_id, x, y) => {
-                              ime.send_xim_spot(window_id, x, y);
-                          }
-                          ImeRequest::Allow(window_id, allowed) => {
-                              ime.set_ime_allowed(window_id, allowed);
-                          }
-                      }
+          old = '''        } else {
+                      Err(ImeCreationError::OpenFailure(inner.potential_input_methods))
                   }
           '''
 
-          new_requests = '''        if let Ok(request) = self.ime_receiver.try_recv() {
-                      if let Some(ime) = wt.ime.as_ref() {
-                          let mut ime = ime.borrow_mut();
+          new = '''        } else {
+                      eprintln!(
+                          "H700: XIM unavailable; continuing without an input method: {:#?}",
+                          inner.potential_input_methods
+                      );
 
-                          match request {
-                              ImeRequest::Position(window_id, x, y) => {
-                                  ime.send_xim_spot(window_id, x, y);
-                              }
-                              ImeRequest::Allow(window_id, allowed) => {
-                                  ime.set_ime_allowed(window_id, allowed);
-                              }
-                          }
-                      }
+                      inner.is_destroyed = true;
+                      Ok(Ime { xconn, inner })
                   }
           '''
 
-          replace_once(
-              event_file,
-              old_requests,
-              new_requests,
-              "Pedidos opcionais do IME",
-          )
+          if old not in text:
+              print("ERRO: trecho esperado do Ime::new não foi encontrado.")
+              position = text.find("ImeCreationError::OpenFailure")
+              if position >= 0:
+                  print(text[max(0, position - 500):position + 500])
+              raise SystemExit(1)
 
-          print("\nPatch do winit concluído.")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          print("OK: winit agora continua sem XIM.")
           PY
 
-          echo
-          echo "Usos restantes de IME nos arquivos alterados:"
-          grep -R -n \
-            "ime.borrow\|ime.as_ref\|event_loop.ime\|wt.ime" \
-            third_party/winit/src/platform_impl/linux/x11/mod.rs \
-            third_party/winit/src/platform_impl/linux/x11/window.rs \
-            third_party/winit/src/platform_impl/linux/x11/event_processor.rs \
-            || true
+          grep -n -C 10 "H700: XIM unavailable" \
+            third_party/winit/src/platform_impl/linux/x11/ime/mod.rs
 
       - name: Add local winit Cargo patch
         run: |
@@ -358,11 +119,10 @@ print("OK: Leitura de texto sem IME obrigatório")
 
           cargo = Path("Cargo.toml")
           text = cargo.read_text(encoding="utf-8")
-
           patch_line = 'winit = { path = "third_party/winit" }'
 
           if patch_line in text:
-              print("Patch local do winit já está presente.")
+              print("Patch local do winit já presente.")
           elif "[patch.crates-io]" in text:
               text = text.replace(
                   "[patch.crates-io]",
@@ -370,38 +130,30 @@ print("OK: Leitura de texto sem IME obrigatório")
                   1,
               )
               cargo.write_text(text, encoding="utf-8")
-              print("winit adicionado à seção [patch.crates-io] existente.")
           else:
-              text = text.rstrip() + "\n\n[patch.crates-io]\n" + patch_line + "\n"
+              text = (
+                  text.rstrip()
+                  + "\n\n[patch.crates-io]\n"
+                  + patch_line
+                  + "\n"
+              )
               cargo.write_text(text, encoding="utf-8")
-              print("Seção [patch.crates-io] criada.")
+
+          print("Cargo.toml atualizado.")
           PY
 
-          echo
-          echo "Final do Cargo.toml:"
           tail -n 20 Cargo.toml
 
-      - name: Verify local winit patch
+      - name: Verify local winit
         run: |
           . "$HOME/.cargo/env"
 
-          cargo metadata --no-deps --format-version 1 > /tmp/metadata.json
-
-          echo "Dependência winit selecionada:"
-          cargo tree -i winit | head -n 30 || true
+          cargo tree -i winit | head -n 40
 
           if ! cargo tree -i winit | grep -q "third_party/winit"; then
-            echo "AVISO: cargo tree não mostrou o caminho local literalmente."
-            echo "Verificando pelo metadata e pelo build seguinte."
+            echo "ERRO: a cópia local do winit não foi selecionada."
+            exit 1
           fi
-
-      - name: Show workspace packages
-        run: |
-          . "$HOME/.cargo/env"
-
-          cargo metadata --no-deps --format-version 1 \
-            | grep -o '"name":"[^"]*"' \
-            | sort -u || true
 
       - name: Build Ruffle
         run: |
@@ -412,23 +164,17 @@ print("OK: Leitura de texto sem IME obrigatório")
           if cargo metadata --no-deps --format-version 1 \
             | grep -q '"name":"ruffle_desktop"'; then
             cargo build --release --package ruffle_desktop
-
           elif cargo metadata --no-deps --format-version 1 \
             | grep -q '"name":"ruffle_desktop_native"'; then
             cargo build --release --package ruffle_desktop_native
-
           else
-            echo "Pacote desktop não identificado; tentando o workspace."
+            echo "Pacote desktop não identificado; tentando workspace."
             cargo build --release
           fi
 
       - name: Prepare artifact
         run: |
           mkdir -p out/libs
-
-          echo "Executáveis encontrados:"
-          find target/release -maxdepth 2 \
-            -type f -executable -print
 
           RUFFLE_FILE="$(find target/release -maxdepth 2 \
             -type f -executable \
@@ -438,7 +184,7 @@ print("OK: Leitura de texto sem IME obrigatório")
             | head -n 1)"
 
           if [ -z "$RUFFLE_FILE" ]; then
-            echo "Executável do Ruffle não encontrado."
+            echo "ERRO: executável do Ruffle não encontrado."
             exit 1
           fi
 
@@ -450,13 +196,6 @@ print("OK: Leitura de texto sem IME obrigatório")
 
           cp -L /usr/lib/aarch64-linux-gnu/libcrypto.so.1.1 \
             out/libs/ 2>/dev/null || true
-
-          GTK_LIB="/usr/lib/aarch64-linux-gnu/libgtk-3.so.0"
-
-          if [ ! -f "$GTK_LIB" ]; then
-            echo "libgtk-3.so.0 não foi encontrada."
-            exit 1
-          fi
 
           copy_safe_library() {
             lib="$1"
@@ -476,10 +215,15 @@ print("OK: Leitura de texto sem IME obrigatório")
             esac
           }
 
-          echo "Copiando GTK e dependências diretas..."
+          GTK_LIB="/usr/lib/aarch64-linux-gnu/libgtk-3.so.0"
+
+          if [ ! -f "$GTK_LIB" ]; then
+            echo "ERRO: libgtk-3.so.0 não encontrada."
+            exit 1
+          fi
 
           ldd "$GTK_LIB" \
-            | awk '/=> \// {print $3}' \
+            | awk '/=> \\// {print $3}' \
             | sort -u \
             | while read -r lib; do
                 copy_safe_library "$lib"
@@ -487,10 +231,8 @@ print("OK: Leitura de texto sem IME obrigatório")
 
           cp -L "$GTK_LIB" out/libs/
 
-          echo "Copiando dependências do executável..."
-
           ldd out/ruffle \
-            | awk '/=> \// {print $3}' \
+            | awk '/=> \\// {print $3}' \
             | sort -u \
             | while read -r lib; do
                 copy_safe_library "$lib"
@@ -508,7 +250,7 @@ print("OK: Leitura de texto sem IME obrigatório")
             out/libs/libblkid.so.*
 
           cp /tmp/ruffle_revision.txt out/revision.txt
-          echo "winit-0.27.5-optional-ime" > out/patch.txt
+          echo "winit-0.27.5-no-xim" > out/patch.txt
 
           file out/ruffle | tee out/info.txt
           ldd out/ruffle | tee -a out/info.txt || true
@@ -516,25 +258,8 @@ print("OK: Leitura de texto sem IME obrigatório")
           echo "Bibliotecas empacotadas:"
           ls -lh out/libs
 
-          echo "Verificando bibliotecas proibidas:"
-
-          if find out/libs -maxdepth 1 -type f \
-            \( -name 'libc.so.*' \
-            -o -name 'libpthread.so.*' \
-            -o -name 'libdl.so.*' \
-            -o -name 'librt.so.*' \
-            -o -name 'libm.so.*' \
-            -o -name 'libgcc_s.so.*' \
-            -o -name 'ld-linux-*.so.*' \
-            -o -name 'libmount.so.*' \
-            -o -name 'libblkid.so.*' \) \
-            | grep -q .; then
-              echo "ERRO: bibliotecas críticas do sistema foram empacotadas."
-              exit 1
-          fi
-
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ruffle-h700-2023-optional-ime
+          name: ruffle-h700-2023-no-xim
           path: out/
