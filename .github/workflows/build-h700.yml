@@ -221,30 +221,41 @@ jobs:
           # Leitura de caracteres sem exigir contexto IME.
           # Os eventos KeyboardInput continuam funcionando.
           # ---------------------------------------------------------
-          old_get_context = '''                    let written = if let Some(ic) = wt.ime.borrow().get_context(window) {
-                              wt.xconn.lookup_utf8(ic, xkev)
-                          } else {
-                              return;
-                          };
-          '''
+          text = event_file.read_text(encoding="utf-8")
 
-          new_get_context = '''                    let written = if let Some(ime) = wt.ime.as_ref() {
-                              if let Some(ic) = ime.borrow().get_context(window) {
-                                  wt.xconn.lookup_utf8(ic, xkev)
-                              } else {
-                                  String::new()
-                              }
-                          } else {
-                              String::new()
-                          };
-          '''
+pattern = r'''let written\s*=\s*if let Some\(ic\)\s*=\s*wt\.ime\.borrow\(\)\.get_context\(window\)\s*\{
+\s*wt\.xconn\.lookup_utf8\(ic,\s*xkev\)
+\s*\}\s*else\s*\{
+\s*return;
+\s*\};'''
 
-          replace_once(
-              event_file,
-              old_get_context,
-              new_get_context,
-              "Leitura de texto sem IME obrigatório",
-          )
+replacement = '''let written = if let Some(ime) = wt.ime.as_ref() {
+                        if let Some(ic) = ime.borrow().get_context(window) {
+                            wt.xconn.lookup_utf8(ic, xkev)
+                        } else {
+                            String::new()
+                        }
+                    } else {
+                        String::new()
+                    };'''
+
+text, count = re.subn(
+    pattern,
+    replacement,
+    text,
+    count=1,
+    flags=re.MULTILINE,
+)
+
+if count != 1:
+    print("ERRO: bloco de leitura de texto não encontrado.")
+    position = text.find("get_context(window)")
+    if position >= 0:
+        print(text[max(0, position - 400):position + 500])
+    raise SystemExit(1)
+
+event_file.write_text(text, encoding="utf-8")
+print("OK: Leitura de texto sem IME obrigatório")
 
           # ---------------------------------------------------------
           # Foco do IME opcional.
