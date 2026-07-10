@@ -99,19 +99,55 @@ jobs:
           cp "$RUFFLE_FILE" out/ruffle
           chmod +x out/ruffle
 
-          cp /usr/lib/aarch64-linux-gnu/libssl.so.1.1 \
+          cp -L /usr/lib/aarch64-linux-gnu/libssl.so.1.1 \
             out/libs/ 2>/dev/null || true
 
-          cp /usr/lib/aarch64-linux-gnu/libcrypto.so.1.1 \
+          cp -L /usr/lib/aarch64-linux-gnu/libcrypto.so.1.1 \
             out/libs/ 2>/dev/null || true
+
+          GTK_LIB="/usr/lib/aarch64-linux-gnu/libgtk-3.so.0"
+
+          if [ ! -f "$GTK_LIB" ]; then
+            echo "libgtk-3.so.0 não foi encontrada."
+            exit 1
+          fi
+
+          echo "Copiando GTK e dependências diretas..."
+
+          ldd "$GTK_LIB" \
+            | awk '/=> \// {print $3}' \
+            | sort -u \
+            | while read -r lib; do
+                if [ -f "$lib" ]; then
+                  echo "Copiando: $lib"
+                  cp -L "$lib" out/libs/ 2>/dev/null || true
+                fi
+              done
+
+          cp -L "$GTK_LIB" out/libs/
+
+          echo "Copiando dependências do executável..."
+
+          ldd out/ruffle \
+            | awk '/=> \// {print $3}' \
+            | sort -u \
+            | while read -r lib; do
+                if [ -f "$lib" ]; then
+                  echo "Copiando: $lib"
+                  cp -L "$lib" out/libs/ 2>/dev/null || true
+                fi
+              done
 
           cp /tmp/ruffle_revision.txt out/revision.txt
 
           file out/ruffle | tee out/info.txt
           ldd out/ruffle | tee -a out/info.txt || true
 
+          echo "Bibliotecas empacotadas:"
+          ls -lh out/libs
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ruffle-h700-2023-01-28
+          name: ruffle-h700-2023-gtk
           path: out/
