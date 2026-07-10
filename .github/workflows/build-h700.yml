@@ -2,11 +2,6 @@ name: Build Old Ruffle H700
 
 on:
   workflow_dispatch:
-    inputs:
-      revision:
-        description: "Ruffle revision/tag"
-        required: true
-        default: "nightly-2021-01-15"
 
 jobs:
   build:
@@ -28,7 +23,6 @@ jobs:
       - name: Checkout Ruffle
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.revision }}
           fetch-depth: 0
 
       - name: Install Rust
@@ -91,10 +85,10 @@ jobs:
           file out/ruffle | tee out/info.txt
           ldd out/ruffle | tee -a out/info.txt || true
 
-          echo "${{ inputs.revision }}" > out/revision.txt
+          git rev-parse HEAD > out/revision.txt
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ruffle-old-${{ inputs.revision }}
+          name: ruffle-h700-portmaster
           path: out/
