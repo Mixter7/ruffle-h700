@@ -483,12 +483,27 @@ impl ApplicationHandler<RuffleEvent> for App {
 
             let event_loop_proxy = self.event_loop_proxy.clone();
             let preferences = self.preferences.clone();
+
+            eprintln!("========== H700 STEP 1: before create_window ==========");
+
             let window = event_loop
                 .create_window(window_attributes)
                 .expect("Window should be created");
+
+            eprintln!("========== H700 STEP 2: after create_window ==========");
+
             let max_window_size = get_screen_size(&window);
+
+            eprintln!("========== H700 STEP 3: after get_screen_size ==========");
+
             window.set_max_inner_size(Some(max_window_size));
+
+            eprintln!("========== H700 STEP 4: after set_max_inner_size ==========");
+
             let window = Arc::new(window);
+
+            eprintln!("========== H700 STEP 5: before GuiController::new ==========");
+
             let font_database = self.font_database.clone();
 
             let mut gui = match GuiController::new(
