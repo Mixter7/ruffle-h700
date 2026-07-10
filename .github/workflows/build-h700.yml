@@ -61,6 +61,8 @@ jobs:
         run: |
           . "$HOME/.cargo/env"
 
+          export RUSTFLAGS="-A dangerous_implicit_autorefs"
+
           if cargo metadata --no-deps --format-version 1 \
             | grep -q '"name":"ruffle_desktop"'; then
             cargo build --release --package ruffle_desktop
