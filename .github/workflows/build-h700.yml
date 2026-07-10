@@ -1,4 +1,4 @@
-name: Build Old Ruffle H700
+name: Build Ruffle H700 PortMaster
 
 on:
   workflow_dispatch:
@@ -29,28 +29,36 @@ jobs:
         run: |
           curl --proto '=https' --tlsv1.2 \
             -sSf https://sh.rustup.rs | sh -s -- -y
+
           . "$HOME/.cargo/env"
+
           rustc --version
           cargo --version
 
       - name: Detect desktop package
         run: |
-          echo "Workspace packages:"
           . "$HOME/.cargo/env"
+
+          echo "Workspace packages:"
+
           cargo metadata --no-deps --format-version 1 \
             | grep -o '"name":"[^"]*"' \
             | sort -u || true
 
-      - name: Build old Ruffle
+      - name: Build Ruffle
         run: |
           . "$HOME/.cargo/env"
 
           if cargo metadata --no-deps --format-version 1 \
             | grep -q '"name":"ruffle_desktop"'; then
+
             cargo build --release --package ruffle_desktop
+
           elif cargo metadata --no-deps --format-version 1 \
             | grep -q '"name":"ruffle_desktop_native"'; then
+
             cargo build --release --package ruffle_desktop_native
+
           else
             echo "Pacote desktop não identificado."
             cargo build --release
@@ -60,12 +68,15 @@ jobs:
         run: |
           mkdir -p out/libs
 
+          echo "Executáveis encontrados:"
+
           find target/release -maxdepth 2 \
             -type f -executable -print
 
           RUFFLE_FILE="$(find target/release -maxdepth 2 \
             -type f -executable \
-            \( -name 'ruffle' -o -name 'ruffle_desktop' \
+            \( -name 'ruffle' \
+            -o -name 'ruffle_desktop' \
             -o -name 'ruffle_desktop_native' \) \
             | head -n 1)"
 
@@ -79,13 +90,14 @@ jobs:
 
           cp /usr/lib/aarch64-linux-gnu/libssl.so.1.1 \
             out/libs/ 2>/dev/null || true
+
           cp /usr/lib/aarch64-linux-gnu/libcrypto.so.1.1 \
             out/libs/ 2>/dev/null || true
 
           file out/ruffle | tee out/info.txt
           ldd out/ruffle | tee -a out/info.txt || true
 
-          git rev-parse HEAD > out/revision.txt
+          echo "h700-portmaster diagnostic build" > out/revision.txt
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
