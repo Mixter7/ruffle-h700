@@ -240,40 +240,186 @@ jobs:
           file /tmp/libsegvtrace.so
           ldd /tmp/libsegvtrace.so || true
 
-      - name: Show winit X11 window source
+      - name: Patch winit X11 window trace safely
         run: |
           WINDOW_FILE="third_party/winit/src/platform_impl/linux/x11/window.rs"
 
           if [ ! -f "$WINDOW_FILE" ]; then
             echo "ERRO: window.rs do winit não encontrado."
-            find third_party/winit/src/platform_impl/linux/x11 \
-              -maxdepth 2 -type f -name '*.rs' -print || true
             exit 1
           fi
 
-          echo "WINDOW_FILE=$WINDOW_FILE"
-          echo
-          echo "===== Funções de criação de janela ====="
+          python3 - "$WINDOW_FILE" <<'PY'
+          from pathlib import Path
+          import sys
 
-          grep -n \
-            -e "pub(crate) fn new" \
-            -e "pub fn new" \
-            -e "fn new" \
-            "$WINDOW_FILE" || true
+          path = Path(sys.argv[1])
+          text = path.read_text(encoding="utf-8")
+
+          replacements = [
+              (
+                  """    ) -> Result<UnownedWindow, OsError> {
+                  let xconn = &event_loop.xconn;
+          """,
+                  """    ) -> Result<UnownedWindow, OsError> {
+                  eprintln!("========== H700 WINIT A: entered UnownedWindow::new ==========");
+                  let xconn = &event_loop.xconn;
+                  eprintln!("========== H700 WINIT B: got X connection ==========");
+          """,
+              ),
+              (
+                  """        let mut monitors = leap!(xconn.available_monitors());
+                  let guessed_monitor = if monitors.is_empty() {
+          """,
+                  """        eprintln!("========== H700 WINIT C: before available_monitors ==========");
+                  let mut monitors = leap!(xconn.available_monitors());
+                  eprintln!("========== H700 WINIT D: after available_monitors; count={} ==========", monitors.len());
+                  let guessed_monitor = if monitors.is_empty() {
+          """,
+              ),
+              (
+                  """        let scale_factor = guessed_monitor.scale_factor();
+                  info!("Guessed window scale factor: {}", scale_factor);
+          """,
+                  """        eprintln!("========== H700 WINIT E: monitor selected ==========");
+                  let scale_factor = guessed_monitor.scale_factor();
+                  info!("Guessed window scale factor: {}", scale_factor);
+                  eprintln!("========== H700 WINIT F: scale factor={} ==========", scale_factor);
+          """,
+              ),
+              (
+                  """        let window_attributes = {
+                  use xproto::EventMask;
+          """,
+                  """        eprintln!("========== H700 WINIT G: before CreateWindowAux ==========");
+                  let window_attributes = {
+                  use xproto::EventMask;
+          """,
+              ),
+              (
+                  """        let parent = window_attrs.platform_specific.x11.embed_window.unwrap_or(root);
+
+                  // finally creating the window
+                  let xwindow = {
+          """,
+                  """        let parent = window_attrs.platform_specific.x11.embed_window.unwrap_or(root);
+
+                  eprintln!("========== H700 WINIT H: before X11 create_window block ==========");
+
+                  // finally creating the window
+                  let xwindow = {
+          """,
+              ),
+              (
+                  """            let wid = leap!(xconn.xcb_connection().generate_id());
+                  let result = xconn.xcb_connection().create_window(
+          """,
+                  """            eprintln!("========== H700 WINIT I: before generate_id ==========");
+                  let wid = leap!(xconn.xcb_connection().generate_id());
+                  eprintln!("========== H700 WINIT J: generated window id={} ==========", wid);
+                  let result = xconn.xcb_connection().create_window(
+          """,
+              ),
+              (
+                  """                &window_attributes,
+                  );
+                  leap!(leap!(result).check());
+                  wid
+          """,
+                  """                &window_attributes,
+                  );
+                  eprintln!("========== H700 WINIT K: create_window request sent ==========");
+                  let cookie = leap!(result);
+                  eprintln!("========== H700 WINIT L: before create_window check ==========");
+                  leap!(cookie.check());
+                  eprintln!("========== H700 WINIT M: create_window check passed ==========");
+                  wid
+          """,
+              ),
+              (
+                  """        if visual == x11rb::COPY_FROM_PARENT {
+                  visual = leap!(leap!(xconn
+          """,
+                  """        eprintln!("========== H700 WINIT N: X11 window created ==========");
+                  if visual == x11rb::COPY_FROM_PARENT {
+                  eprintln!("========== H700 WINIT O: before get_window_attributes ==========");
+                  visual = leap!(leap!(xconn
+          """,
+              ),
+              (
+                  """                .reply())
+                  .visual;
+                  }
+          """,
+                  """                .reply())
+                  .visual;
+                  eprintln!("========== H700 WINIT P: after get_window_attributes ==========");
+                  }
+          """,
+              ),
+              (
+                  """        // Title must be set before mapping.
+                  // Some tiling window managers
+          """,
+                  """        eprintln!("========== H700 WINIT Q: UnownedWindow struct built ==========");
+                  // Title must be set before mapping.
+                  // Some tiling window managers
+          """,
+              ),
+              (
+                  """        unsafe {
+                  let mut supported_ptr = ffi::False;
+          """,
+                  """        eprintln!("========== H700 WINIT R: before XkbSetDetectableAutoRepeat ==========");
+                  unsafe {
+                  let mut supported_ptr = ffi::False;
+          """,
+              ),
+              (
+                  """            if supported_ptr == ffi::False {
+                  return Err(os_error!(OsError::Misc("`XkbSetDetectableAutoRepeat` failed")));
+                  }
+                  }
+          """,
+                  """            if supported_ptr == ffi::False {
+                  return Err(os_error!(OsError::Misc("`XkbSetDetectableAutoRepeat` failed")));
+                  }
+                  }
+                  eprintln!("========== H700 WINIT S: after XkbSetDetectableAutoRepeat ==========");
+          """,
+              ),
+              (
+                  """        let window = leap!(xconn.sync_with_server().map(|_| window));
+                  Ok(window)
+          """,
+                  """        eprintln!("========== H700 WINIT T: before sync_with_server ==========");
+                  let window = leap!(xconn.sync_with_server().map(|_| window));
+                  eprintln!("========== H700 WINIT U: window creation completed ==========");
+                  Ok(window)
+          """,
+              ),
+          ]
+
+          applied = 0
+          for old, new in replacements:
+              if old in text:
+                  text = text.replace(old, new, 1)
+                  applied += 1
+              else:
+                  print("AVISO: trecho não encontrado:")
+                  print(old[:180])
+
+          if applied < 8:
+              print(f"ERRO: somente {applied} pontos foram aplicados; esperado pelo menos 8.")
+              raise SystemExit(1)
+
+          path.write_text(text, encoding="utf-8")
+          print(f"OK: {applied} marcadores seguros inseridos.")
+          PY
 
           echo
-          echo "===== Trecho principal de window.rs ====="
-          sed -n '430,620p' "$WINDOW_FILE"
-
-          echo
-          echo "===== Ocorrências relevantes ====="
-          grep -n -C 12 \
-            -e "CreateWindow" \
-            -e "create_window" \
-            -e "map_window" \
-            -e "check_request" \
-            -e "leap!" \
-            "$WINDOW_FILE" || true
+          echo "Marcadores inseridos:"
+          grep -n "H700 WINIT" "$WINDOW_FILE"
 
       - name: Build Ruffle debug
         run: |
