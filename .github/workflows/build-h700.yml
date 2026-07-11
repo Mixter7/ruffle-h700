@@ -240,7 +240,7 @@ jobs:
           file /tmp/libsegvtrace.so
           ldd /tmp/libsegvtrace.so || true
 
-      - name: Show exact winit X11 window function
+      - name: Patch exact winit X11 create_window trace
         run: |
           WINDOW_FILE="third_party/winit/src/platform_impl/linux/x11/window.rs"
 
@@ -249,34 +249,143 @@ jobs:
             exit 1
           fi
 
-          echo "WINDOW_FILE=$WINDOW_FILE"
-          echo
-          echo "===== LINHAS 1 A 260 ====="
-          sed -n '1,260p' "$WINDOW_FILE"
+          python3 - "$WINDOW_FILE" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          text = path.read_text(encoding="utf-8")
+
+          old = """        // finally creating the window
+                  let xwindow = {
+                      let (x, y) = position.map_or((0, 0), Into::into);
+                      let wid = leap!(xconn.xcb_connection().generate_id());
+                      let result = xconn.xcb_connection().create_window(
+                          depth,
+                          wid,
+                          parent,
+                          x,
+                          y,
+                          dimensions.0.try_into().unwrap(),
+                          dimensions.1.try_into().unwrap(),
+                          0,
+                          xproto::WindowClass::INPUT_OUTPUT,
+                          visual,
+                          &window_attributes,
+                      );
+                      leap!(leap!(result).check());
+
+                      wid
+                  };
+          """
+
+          new = """        // finally creating the window
+                  let xwindow = {
+                      eprintln!("========== H700 WINIT 1: entered X11 create_window block ==========");
+
+                      let (x, y) = position.map_or((0, 0), Into::into);
+                      eprintln!(
+                          "========== H700 WINIT 2: geometry x={} y={} width={} height={} ==========",
+                          x,
+                          y,
+                          dimensions.0,
+                          dimensions.1
+                      );
+
+                      eprintln!("========== H700 WINIT 3: before generate_id ==========");
+                      let wid = leap!(xconn.xcb_connection().generate_id());
+                      eprintln!("========== H700 WINIT 4: generated window id={} ==========", wid);
+
+                      eprintln!("========== H700 WINIT 5: before create_window call ==========");
+                      let result = xconn.xcb_connection().create_window(
+                          depth,
+                          wid,
+                          parent,
+                          x,
+                          y,
+                          dimensions.0.try_into().unwrap(),
+                          dimensions.1.try_into().unwrap(),
+                          0,
+                          xproto::WindowClass::INPUT_OUTPUT,
+                          visual,
+                          &window_attributes,
+                      );
+                      eprintln!("========== H700 WINIT 6: create_window call returned ==========");
+
+                      let cookie = leap!(result);
+                      eprintln!("========== H700 WINIT 7: result accepted; before cookie.check ==========");
+
+                      leap!(cookie.check());
+                      eprintln!("========== H700 WINIT 8: cookie.check passed ==========");
+
+                      wid
+                  };
+
+                  eprintln!("========== H700 WINIT 9: X11 window block completed ==========");
+          """
+
+          if old not in text:
+              print("ERRO: bloco exato de create_window não foi encontrado.")
+              pos = text.find("// finally creating the window")
+              if pos >= 0:
+                  print(text[pos:pos + 1800])
+              raise SystemExit(1)
+
+          text = text.replace(old, new, 1)
+
+          old_visual = """        if visual == x11rb::COPY_FROM_PARENT {
+                      visual = leap!(leap!(xconn
+                          .xcb_connection()
+                          .get_window_attributes(xwindow as xproto::Window))
+                      .reply())
+                      .visual;
+                  }
+          """
+
+          new_visual = """        if visual == x11rb::COPY_FROM_PARENT {
+                      eprintln!("========== H700 WINIT 10: before get_window_attributes ==========");
+                      visual = leap!(leap!(xconn
+                          .xcb_connection()
+                          .get_window_attributes(xwindow as xproto::Window))
+                      .reply())
+                      .visual;
+                      eprintln!("========== H700 WINIT 11: get_window_attributes completed ==========");
+                  }
+          """
+
+          if old_visual not in text:
+              print("ERRO: bloco get_window_attributes não encontrado.")
+              raise SystemExit(1)
+
+          text = text.replace(old_visual, new_visual, 1)
+
+          old_sync = """        // We never want to give the user a broken window, since by then, it's too late to handle.
+                  let window = leap!(xconn.sync_with_server().map(|_| window));
+
+                  Ok(window)
+          """
+
+          new_sync = """        // We never want to give the user a broken window, since by then, it's too late to handle.
+                  eprintln!("========== H700 WINIT 12: before sync_with_server ==========");
+                  let window = leap!(xconn.sync_with_server().map(|_| window));
+                  eprintln!("========== H700 WINIT 13: sync_with_server completed ==========");
+
+                  Ok(window)
+          """
+
+          if old_sync not in text:
+              print("ERRO: bloco sync_with_server não encontrado.")
+              raise SystemExit(1)
+
+          text = text.replace(old_sync, new_sync, 1)
+
+          path.write_text(text, encoding="utf-8")
+          print("OK: rastreamento exato do create_window aplicado.")
+          PY
 
           echo
-          echo "===== LINHAS 260 A 560 ====="
-          sed -n '260,560p' "$WINDOW_FILE"
-
-          echo
-          echo "===== FUNÇÕES NEW ====="
-          grep -n -C 20 \
-            -e "fn new" \
-            -e "pub fn new" \
-            -e "pub(crate) fn new" \
-            "$WINDOW_FILE" || true
-
-          echo
-          echo "===== CREATE_WINDOW E SYNC ====="
-          grep -n -C 25 \
-            -e "create_window" \
-            -e "CreateWindow" \
-            -e "sync_with_server" \
-            -e "map_window" \
-            -e "XkbSetDetectableAutoRepeat" \
-            "$WINDOW_FILE" || true
-
-          exit 1
+          echo "Marcadores aplicados:"
+          grep -n "H700 WINIT" "$WINDOW_FILE"
 
       - name: Build Ruffle debug
         run: |
