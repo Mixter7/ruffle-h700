@@ -240,7 +240,7 @@ jobs:
           file /tmp/libsegvtrace.so
           ldd /tmp/libsegvtrace.so || true
 
-      - name: Add winit X11 window creation trace
+      - name: Show winit X11 window source
         run: |
           WINDOW_FILE="third_party/winit/src/platform_impl/linux/x11/window.rs"
 
@@ -251,90 +251,29 @@ jobs:
             exit 1
           fi
 
-          python3 - "$WINDOW_FILE" <<'PY'
-          from pathlib import Path
-          import sys
+          echo "WINDOW_FILE=$WINDOW_FILE"
+          echo
+          echo "===== Funções de criação de janela ====="
 
-          path = Path(sys.argv[1])
-          text = path.read_text(encoding="utf-8")
-
-          print("Arquivo analisado:", path)
-
-          # Marcador na função principal de criação da janela X11.
-          function_patterns = [
-              "pub(crate) fn new(",
-              "pub fn new(",
-              "fn new(",
-          ]
-
-          function_pos = -1
-          for pattern in function_patterns:
-              pos = text.find(pattern)
-              if pos >= 0:
-                  function_pos = pos
-                  break
-
-          if function_pos < 0:
-              print("ERRO: função de criação da janela não localizada.")
-              raise SystemExit(1)
-
-          brace_pos = text.find("{", function_pos)
-          if brace_pos < 0:
-              print("ERRO: abertura da função não localizada.")
-              raise SystemExit(1)
-
-          text = (
-              text[:brace_pos + 1]
-              + '\n        eprintln!("========== H700 WINIT WINDOW STEP A: entered X11 window creation ==========");\n'
-              + text[brace_pos + 1:]
-          )
-
-          replacements = [
-              (
-                  "let screen_id =",
-                  'eprintln!("========== H700 WINIT WINDOW STEP B: before screen selection ==========");\n        let screen_id =',
-              ),
-              (
-                  "let root =",
-                  'eprintln!("========== H700 WINIT WINDOW STEP C: before root window lookup ==========");\n        let root =',
-              ),
-              (
-                  "let window =",
-                  'eprintln!("========== H700 WINIT WINDOW STEP D: before X11 window allocation ==========");\n        let window =',
-              ),
-              (
-                  "xcb::x::CreateWindow",
-                  'eprintln!("========== H700 WINIT WINDOW STEP E: before CreateWindow request ==========");\n        xcb::x::CreateWindow',
-              ),
-              (
-                  "check_request",
-                  'eprintln!("========== H700 WINIT WINDOW STEP F: before request check ==========");\n        check_request',
-              ),
-              (
-                  "map_window",
-                  'eprintln!("========== H700 WINIT WINDOW STEP G: before map_window ==========");\n        map_window',
-              ),
-          ]
-
-          applied = 0
-          for old, new in replacements:
-              if old in text:
-                  text = text.replace(old, new, 1)
-                  print("Marcador aplicado em:", old)
-                  applied += 1
-
-          if applied == 0:
-              print("ERRO: nenhum ponto interno conhecido foi localizado.")
-              print(text[function_pos:function_pos + 3000])
-              raise SystemExit(1)
-
-          path.write_text(text, encoding="utf-8")
-          print(f"OK: {applied} marcadores adicionados ao window.rs.")
-          PY
+          grep -n \
+            -e "pub(crate) fn new" \
+            -e "pub fn new" \
+            -e "fn new" \
+            "$WINDOW_FILE" || true
 
           echo
-          echo "Marcadores inseridos:"
-          grep -n -C 2 "H700 WINIT WINDOW STEP" "$WINDOW_FILE" || true
+          echo "===== Trecho principal de window.rs ====="
+          sed -n '430,620p' "$WINDOW_FILE"
+
+          echo
+          echo "===== Ocorrências relevantes ====="
+          grep -n -C 12 \
+            -e "CreateWindow" \
+            -e "create_window" \
+            -e "map_window" \
+            -e "check_request" \
+            -e "leap!" \
+            "$WINDOW_FILE" || true
 
       - name: Build Ruffle debug
         run: |
