@@ -2,6 +2,14 @@ name: Build Ruffle H700 Release
 
 on:
   workflow_dispatch:
+    inputs:
+      profile:
+        description: "Cargo profile (dist = LTO, slower to build but faster to run; release = quick build)"
+        type: choice
+        default: dist
+        options:
+          - dist
+          - release
 
 jobs:
   build:
@@ -71,23 +79,28 @@ jobs:
           . "$HOME/.cargo/env"
           cargo fetch
 
-      - name: Build Ruffle release
+      - name: Build Ruffle
         run: |
           . "$HOME/.cargo/env"
 
-          # Release build: optimized, no debug assertions, no debuginfo (the debug build was ~800 MB and slow).
-          export RUSTFLAGS="-A dangerous_implicit_autorefs"
-          export CARGO_PROFILE_RELEASE_DEBUG=0
-          export CARGO_PROFILE_RELEASE_STRIP=symbols
+          PROFILE="${{ inputs.profile || 'dist' }}"
+          PUP="$(echo "$PROFILE" | tr a-z A-Z)"
+          echo "Profile: $PROFILE"
 
-          cargo build --release --package ruffle_desktop
+          # H700 = quad Cortex-A53 (ARMv8.0, in-order): tune code generation for it.
+          export RUSTFLAGS="-A dangerous_implicit_autorefs -C target-cpu=cortex-a53"
+          export "CARGO_PROFILE_${PUP}_DEBUG=0"
+          export "CARGO_PROFILE_${PUP}_STRIP=symbols"
+
+          cargo build --profile "$PROFILE" --package ruffle_desktop
+
       - name: Prepare release artifact with recursive libraries
         run: |
           set -eu
 
           mkdir -p out/libs
 
-          RUFFLE_FILE="$(find target/release -maxdepth 2 \
+          RUFFLE_FILE="$(find target/${{ inputs.profile || 'dist' }} -maxdepth 2 \
             -type f -executable \
             \( -name 'ruffle' \
             -o -name 'ruffle_desktop' \
@@ -190,6 +203,7 @@ jobs:
           done
 
           rm -f \
+            out/libs/libasound.so.* \
             out/libs/libc.so.* \
             out/libs/libpthread.so.* \
             out/libs/libdl.so.* \
