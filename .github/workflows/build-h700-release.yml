@@ -10,6 +10,10 @@ on:
         options:
           - dist
           - release
+      perf_timing:
+        description: "Print per-2s timing of tick / render / present into the game log (diagnostic)"
+        type: boolean
+        default: false
 
 jobs:
   build:
@@ -78,6 +82,76 @@ jobs:
         run: |
           . "$HOME/.cargo/env"
           cargo fetch
+
+      - name: Add H700 timing logs (optional)
+        if: ${{ inputs.perf_timing }}
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("desktop/src/app.rs")
+          s = p.read_text(encoding="utf-8")
+
+          mod = '''
+          mod h700_perf {
+              use std::sync::atomic::{AtomicU64, Ordering};
+              use std::sync::Mutex;
+              use std::time::Instant;
+
+              pub static TICK_US: AtomicU64 = AtomicU64::new(0);
+              pub static TICK_N: AtomicU64 = AtomicU64::new(0);
+              pub static REND_US: AtomicU64 = AtomicU64::new(0);
+              pub static REND_N: AtomicU64 = AtomicU64::new(0);
+              pub static GUI_US: AtomicU64 = AtomicU64::new(0);
+              pub static GUI_N: AtomicU64 = AtomicU64::new(0);
+              static LAST: Mutex<Option<Instant>> = Mutex::new(None);
+
+              pub fn add(us: &AtomicU64, n: &AtomicU64, start: Instant) {
+                  us.fetch_add(start.elapsed().as_micros() as u64, Ordering::Relaxed);
+                  n.fetch_add(1, Ordering::Relaxed);
+              }
+
+              fn take(us: &AtomicU64, n: &AtomicU64) -> (u64, u64) {
+                  (us.swap(0, Ordering::Relaxed), n.swap(0, Ordering::Relaxed))
+              }
+
+              pub fn report() {
+                  let mut last = LAST.lock().unwrap();
+                  let now = Instant::now();
+                  let start = *last.get_or_insert(now);
+                  if now.duration_since(start).as_secs_f64() < 2.0 {
+                      return;
+                  }
+                  *last = Some(now);
+                  let (tu, tn) = take(&TICK_US, &TICK_N);
+                  let (ru, rn) = take(&REND_US, &REND_N);
+                  let (gu, gn) = take(&GUI_US, &GUI_N);
+                  let avg = |u: u64, n: u64| if n == 0 { 0.0 } else { u as f64 / n as f64 / 1000.0 };
+                  eprintln!(
+                      "H700 PERF (2s): tick {} calls avg {:.1} ms | player.render {} calls avg {:.1} ms | gui.render+present {} calls avg {:.1} ms",
+                      tn, avg(tu, tn), rn, avg(ru, rn), gn, avg(gu, gn)
+                  );
+              }
+          }
+          '''
+          anchor = "impl MainWindow {"
+          assert s.count(anchor) == 1
+          s = s.replace(anchor, mod + "\n" + anchor, 1)
+
+          pairs = [
+           ("player.render();",
+            "{ let __t = std::time::Instant::now(); player.render(); h700_perf::add(&h700_perf::REND_US, &h700_perf::REND_N, __t); }"),
+           ("self.gui.render(player);",
+            "{ let __t = std::time::Instant::now(); self.gui.render(player); h700_perf::add(&h700_perf::GUI_US, &h700_perf::GUI_N, __t); h700_perf::report(); }"),
+           ("player.tick(dt);",
+            "{ let __t = std::time::Instant::now(); player.tick(dt); h700_perf::add(&h700_perf::TICK_US, &h700_perf::TICK_N, __t); }"),
+          ]
+          for old, new in pairs:
+              assert s.count(old) == 1, old
+              s = s.replace(old, new, 1)
+          p.write_text(s, encoding="utf-8")
+          print("OK timing patch")
+          PY
+          grep -n "h700_perf" desktop/src/app.rs | head -5
 
       - name: Build Ruffle
         run: |
