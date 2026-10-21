@@ -175,9 +175,15 @@ jobs:
           rep("Avm1::run_frame(context);",
               "let __t4 = web_time::Instant::now();\n            Avm1::run_frame(context);\n            h700_perf2::add(&h700_perf2::AVM1_US, __t4);")
 
+          rep("            match action.action_type {\n                // DoAction/clip event code.",
+              "            let __label = {\n                let __clip = action.clip.name().map(|n| n.to_utf8_lossy().to_string()).unwrap_or_default();\n                match &action.action_type {\n                    ActionType::Normal { .. } => format!(\"Frame [{}]\", __clip),\n                    ActionType::Initialize { .. } => format!(\"Init [{}]\", __clip),\n                    ActionType::Construct { .. } => format!(\"Construct [{}]\", __clip),\n                    ActionType::Method { name, .. } => format!(\"Method {} [{}]\", name.to_utf8_lossy(), __clip),\n                    ActionType::NotifyListeners { method, .. } => format!(\"Notify {}\", method.to_utf8_lossy()),\n                }\n            };\n            let __ta = web_time::Instant::now();\n            match action.action_type {\n                // DoAction/clip event code.")
+          rep("Avm1::notify_system_listeners(action.clip, listener, method, &args, context);\n                }\n            }\n",
+              "Avm1::notify_system_listeners(action.clip, listener, method, &args, context);\n                }\n            }\n            h700_perf2::add_label(__label, __ta);\n")
+
           s += '''
 
           mod h700_perf2 {
+              use std::collections::HashMap;
               use std::sync::Mutex;
               use std::sync::atomic::{AtomicU64, Ordering};
               use web_time::Instant;
@@ -189,6 +195,15 @@ jobs:
               pub static AVM1_US: AtomicU64 = AtomicU64::new(0);
               pub static UPDATE_N: AtomicU64 = AtomicU64::new(0);
               static LAST: Mutex<Option<Instant>> = Mutex::new(None);
+              static LABELS: Mutex<Option<HashMap<String, (u64, u64)>>> = Mutex::new(None);
+
+              pub fn add_label(label: String, start: Instant) {
+                  let us = start.elapsed().as_micros() as u64;
+                  let mut g = LABELS.lock().unwrap();
+                  let e = g.get_or_insert_with(HashMap::new).entry(label).or_insert((0, 0));
+                  e.0 += us;
+                  e.1 += 1;
+              }
 
               pub fn add(us: &AtomicU64, start: Instant) {
                   us.fetch_add(start.elapsed().as_micros() as u64, Ordering::Relaxed);
@@ -208,6 +223,14 @@ jobs:
                       "H700 CORE (2s totals ms): update calls {} | func {:.0} (of which Avm1::run_frame {:.0}) | run_actions {:.0} | update_mouse_state {:.0} | gc collect_debt {:.0}",
                       n, ms(&FUNC_US), ms(&AVM1_US), ms(&ACT_US), ms(&MOUSE_US), ms(&GC_US)
                   );
+                  let mut g = LABELS.lock().unwrap();
+                  if let Some(map) = g.take() {
+                      let mut v: Vec<_> = map.into_iter().collect();
+                      v.sort_by(|a, b| b.1.0.cmp(&a.1.0));
+                      for (label, (us, cnt)) in v.into_iter().take(8) {
+                          eprintln!("H700 TOP {:>7.0} ms {:>6} calls  {}", us as f64 / 1000.0, cnt, label);
+                      }
+                  }
               }
           }
           '''
