@@ -50,6 +50,9 @@ pub struct GuiController {
     /// If this is set, we should not render the main menu.
     no_gui: bool,
     theme_controller: ThemeController,
+    /// Draw our own mouse arrow on top of everything (needed on handhelds where the
+    /// compositor never shows the system cursor). Disable with RUFFLE_SOFTWARE_CURSOR=0.
+    software_cursor: bool,
 }
 
 impl GuiController {
@@ -175,6 +178,9 @@ impl GuiController {
             size,
             no_gui,
             theme_controller,
+            software_cursor: std::env::var("RUFFLE_SOFTWARE_CURSOR")
+                .map(|v| v != "0")
+                .unwrap_or(true),
         })
     }
 
@@ -338,6 +344,13 @@ impl GuiController {
 
         let raw_input = self.egui_winit.take_egui_input(&self.window);
         let show_menu = self.window.fullscreen().is_none() && !self.no_gui;
+        // Hide our arrow when the movie itself hid the mouse (Mouse.hide()).
+        let draw_software_cursor = self.software_cursor
+            && player
+                .as_deref()
+                .and_then(|p| <dyn Any>::downcast_ref::<DesktopUiBackend>(p.ui()))
+                .map(|ui| !matches!(ui.cursor(), egui::CursorIcon::None))
+                .unwrap_or(true);
         let mut full_output = self.egui_winit.egui_ctx().run(raw_input, |context| {
             self.gui.update(
                 context,
@@ -349,6 +362,9 @@ impl GuiController {
                     0.0
                 },
             );
+            if draw_software_cursor {
+                draw_software_cursor_arrow(context);
+            }
         });
         self.repaint_after = full_output
             .viewport_output
@@ -733,4 +749,38 @@ fn mmap_system_font(path: &Path) -> anyhow::Result<memmap2::Mmap> {
 
     let mmap = mmap.map_err(|e| anyhow!("Failed to mmap font file at {path:?}: {e}"))?;
     Ok(mmap)
+}
+
+/// Paints a simple white mouse arrow (black outline) at the pointer position, above everything.
+/// The arrow is built from two convex pieces because egui only fills convex polygons correctly.
+fn draw_software_cursor_arrow(context: &Context) {
+    let Some(pos) = context.input(|i| i.pointer.latest_pos()) else {
+        return;
+    };
+    let painter = context.layer_painter(egui::LayerId::new(
+        egui::Order::Debug,
+        egui::Id::new("software_mouse_cursor"),
+    ));
+    let at = |x: f32, y: f32| pos + egui::vec2(x, y);
+    let pieces = [
+        // Head (tip is exactly at the pointer position).
+        vec![at(0.0, 0.0), at(0.0, 17.0), at(11.5, 12.0)],
+        // Tail.
+        vec![at(4.0, 13.0), at(7.0, 11.5), at(10.0, 19.0), at(7.5, 20.0)],
+    ];
+    // Black outline first, then the white fill on top (hides the seam between the pieces).
+    for points in &pieces {
+        painter.add(egui::Shape::convex_polygon(
+            points.clone(),
+            egui::Color32::BLACK,
+            egui::Stroke::new(2.0, egui::Color32::BLACK),
+        ));
+    }
+    for points in &pieces {
+        painter.add(egui::Shape::convex_polygon(
+            points.clone(),
+            egui::Color32::WHITE,
+            egui::Stroke::NONE,
+        ));
+    }
 }
