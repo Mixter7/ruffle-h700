@@ -1,0 +1,210 @@
+name: Build Ruffle H700 Release
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+
+    container:
+      image: debian:bullseye
+
+    steps:
+      - name: Install dependencies
+        run: |
+          apt update
+          apt install -y \
+            git curl ca-certificates build-essential pkg-config python3 \
+            libssl-dev libasound2-dev libudev-dev \
+            libfontconfig1-dev libxcb1-dev zlib1g-dev \
+            libglib2.0-dev libgtk-3-dev libgdk-pixbuf2.0-dev \
+            libpango1.0-dev libcairo2-dev \
+            libc-bin file default-jre-headless \
+            libxkbcommon0 libxkbcommon-x11-0 libxcb-xkb1 binutils
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Use current branch code
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+          echo "Código que será compilado:"
+          git log -1 --format="%H%n%ci%n%s"
+
+          git rev-parse HEAD > /tmp/ruffle_revision.txt
+
+          echo "Verificando alteração do backend H700..."
+          grep -n "H700" render/wgpu/src/backend.rs || true
+
+          if grep -q "H700 ADAPTER ENUMERATION" render/wgpu/src/backend.rs; then
+            echo "OK: patch de diagnóstico encontrado."
+          else
+            echo "ERRO: o backend.rs modificado não foi encontrado."
+            echo "Confirme que você salvou, fez commit e sincronizou a alteração."
+            exit 1
+          fi
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 \
+            -sSf https://sh.rustup.rs | sh -s -- -y
+
+          . "$HOME/.cargo/env"
+          rustup show
+          rustc --version
+          cargo --version
+
+      - name: Fetch dependencies
+        run: |
+          . "$HOME/.cargo/env"
+          cargo fetch
+
+      - name: Build Ruffle release
+        run: |
+          . "$HOME/.cargo/env"
+
+          # Release build: optimized, no debug assertions, no debuginfo (the debug build was ~800 MB and slow).
+          export RUSTFLAGS="-A dangerous_implicit_autorefs"
+          export CARGO_PROFILE_RELEASE_DEBUG=0
+          export CARGO_PROFILE_RELEASE_STRIP=symbols
+
+          cargo build --release --package ruffle_desktop
+      - name: Prepare release artifact with recursive libraries
+        run: |
+          set -eu
+
+          mkdir -p out/libs
+
+          RUFFLE_FILE="$(find target/release -maxdepth 2 \
+            -type f -executable \
+            \( -name 'ruffle' \
+            -o -name 'ruffle_desktop' \
+            -o -name 'ruffle_desktop_native' \) \
+            | head -n 1)"
+
+          if [ -z "$RUFFLE_FILE" ]; then
+            echo "ERRO: executável debug do Ruffle não encontrado."
+            exit 1
+          fi
+
+          cp "$RUFFLE_FILE" out/ruffle
+          chmod +x out/ruffle
+
+          : > /tmp/lib_queue.txt
+          : > /tmp/lib_seen.txt
+
+          enqueue() {
+            candidate="$1"
+
+            if [ -f "$candidate" ] && ! grep -Fxq "$candidate" /tmp/lib_seen.txt; then
+              echo "$candidate" >> /tmp/lib_queue.txt
+            fi
+          }
+
+          is_forbidden_system_lib() {
+            base="$(basename "$1")"
+
+            case "$base" in
+              libc.so.*|libpthread.so.*|libdl.so.*|librt.so.*|libm.so.*|libgcc_s.so.*|ld-linux-*.so.*|libmount.so.*|libblkid.so.*)
+                return 0
+                ;;
+              *)
+                return 1
+                ;;
+            esac
+          }
+
+          collect_ldd_paths() {
+            binary="$1"
+
+            ldd "$binary" 2>/dev/null \
+              | awk '
+                  /=> \/.*/ { print $3 }
+                  /^[[:space:]]*\/.*\(/ { print $1 }
+                ' \
+              | while IFS= read -r dependency; do
+                  [ -n "$dependency" ] && enqueue "$dependency"
+                done
+          }
+
+          collect_ldd_paths "$RUFFLE_FILE"
+
+          for seed in \
+            /usr/lib/aarch64-linux-gnu/libgtk-3.so.0 \
+            /usr/lib/aarch64-linux-gnu/libgdk-3.so.0 \
+            /usr/lib/aarch64-linux-gnu/libgdk_pixbuf-2.0.so.0 \
+            /usr/lib/aarch64-linux-gnu/libgio-2.0.so.0 \
+            /usr/lib/aarch64-linux-gnu/libgmodule-2.0.so.0 \
+            /usr/lib/aarch64-linux-gnu/libxkbcommon.so.0 \
+            /usr/lib/aarch64-linux-gnu/libxkbcommon-x11.so.0 \
+            /usr/lib/aarch64-linux-gnu/libxcb-xkb.so.1 \
+            /usr/lib/aarch64-linux-gnu/libssl.so.1.1 \
+            /usr/lib/aarch64-linux-gnu/libcrypto.so.1.1
+          do
+            enqueue "$seed"
+          done
+
+          index=1
+
+          while :; do
+            current="$(sed -n "${index}p" /tmp/lib_queue.txt)"
+
+            if [ -z "$current" ]; then
+              break
+            fi
+
+            index=$((index + 1))
+
+            if grep -Fxq "$current" /tmp/lib_seen.txt; then
+              continue
+            fi
+
+            echo "$current" >> /tmp/lib_seen.txt
+
+            if is_forbidden_system_lib "$current"; then
+              echo "Ignorando biblioteca crítica do sistema: $current"
+              continue
+            fi
+
+            if [ ! -f "$current" ]; then
+              echo "AVISO: biblioteca não encontrada: $current"
+              continue
+            fi
+
+            echo "Copiando: $current"
+            cp -L "$current" "out/libs/$(basename "$current")"
+
+            collect_ldd_paths "$current"
+          done
+
+          rm -f \
+            out/libs/libc.so.* \
+            out/libs/libpthread.so.* \
+            out/libs/libdl.so.* \
+            out/libs/librt.so.* \
+            out/libs/libm.so.* \
+            out/libs/libgcc_s.so.* \
+            out/libs/ld-linux-*.so.* \
+            out/libs/libmount.so.* \
+            out/libs/libblkid.so.*
+
+          cp /tmp/ruffle_revision.txt out/revision.txt
+          echo "release-stock-winit-xkb-x11-libs-h700" > out/patch.txt
+
+          file out/ruffle | tee out/info.txt
+          ldd out/ruffle | tee -a out/info.txt || true
+
+          echo
+          echo "Arquivos do artifact:"
+          ls -lh out
+          ls -lh out/libs
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruffle-h700-release
+          path: out/
