@@ -396,6 +396,12 @@ jobs:
           PY
           grep -n "h700_perf2" core/src/player.rs | head -5
 
+      - name: Test bitmap copy regressions
+        run: |
+          . "$HOME/.cargo/env"
+          export RUSTFLAGS="-A dangerous_implicit_autorefs -C target-cpu=cortex-a53"
+          cargo test --package ruffle_core --lib h700_copy_tests
+
       - name: Build Ruffle
         run: |
           . "$HOME/.cargo/env"
