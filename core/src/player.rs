@@ -15,6 +15,7 @@ use crate::backend::navigator::SuccessResponse;
 use crate::backend::ui::FontDefinition;
 use crate::backend::{
     audio::{AudioBackend, AudioManager},
+    locale::LocaleBackend,
     log::LogBackend,
     navigator::{NavigatorBackend, Request},
     storage::StorageBackend,
@@ -29,8 +30,8 @@ use crate::context_menu::{
 };
 use crate::display_object::Avm2MousePick;
 use crate::display_object::{
-    EditText, InteractiveObject, Stage, StageAlign, StageDisplayState, StageScaleMode,
-    TInteractiveObject, WindowMode,
+    EditText, GotoInfo, InteractiveObject, Stage, StageAlign, StageDisplayState, StageScaleMode,
+    StopOrPlay, TInteractiveObject, WindowMode,
 };
 use crate::events::GamepadButton;
 use crate::events::PlayerNotification;
@@ -51,14 +52,15 @@ use crate::orphan_manager::OrphanManager;
 use crate::prelude::*;
 use crate::socket::Sockets;
 use crate::streams::StreamManager;
-use crate::string::{AvmStringInterner, StringContext};
+use crate::string::{AvmString, AvmStringInterner, StringContext};
 use crate::stub::StubCollection;
 use crate::system_properties::SystemProperties;
-use crate::tag_utils::SwfMovie;
+use crate::tag_utils::{SwfMovie, SwfMovieData};
 use crate::timer::Timers;
 use crate::vminterface::Instantiator;
 use async_channel::Sender;
 use enumset::EnumSet;
+use fnv::FnvHashSet;
 use gc_arena::lock::GcRefLock;
 use gc_arena::{Collect, DynamicRootSet, Mutation, Rootable};
 use ruffle_common::duration::FloatDuration;
@@ -112,6 +114,14 @@ impl StaticCallstack {
 #[derive(Collect)]
 #[collect(no_drop)]
 pub struct MouseData<'gc> {
+    /// A set of custom cursors registered via `flash.ui.Mouse.registerCursor()`.
+    pub custom_cursors: FnvHashSet<AvmString<'gc>>,
+
+    /// When setting `flash.ui.Mouse.cursor`, if the value exists
+    /// in `custom_cursors`, then it will be stored here for the
+    /// getter to return, but `forced_cursor` will still be `None`.
+    pub current_custom_cursor: Option<AvmString<'gc>>,
+
     /// The object that the mouse is currently hovering over.
     pub hovered: Option<InteractiveObject<'gc>>,
 
@@ -119,6 +129,21 @@ pub struct MouseData<'gc> {
     pub pressed: Option<InteractiveObject<'gc>>,
     pub right_pressed: Option<InteractiveObject<'gc>>,
     pub middle_pressed: Option<InteractiveObject<'gc>>,
+
+    /// The cursor forced through `flash.ui.Mouse.cursor`. `None` corresponds to
+    /// `MouseCursor.AUTO`: the cursor is chosen automatically from the object
+    /// under the pointer. Any other value overrides that automatic choice.
+    #[collect(require_static)]
+    pub forced_cursor: Option<MouseCursor>,
+
+    /// Whether `Player::update_drag` is currently inside its drop-target
+    /// mouse pick.
+    ///
+    /// That pick resolves AVM1 `hitArea` properties, which can run a user
+    /// getter that calls `stopDrag()` and thereby re-enter `update_drag`
+    /// while the drag is still active; this flag makes the nested call a
+    /// no-op instead of recursing until stack overflow.
+    pub updating_drop_target: bool,
 }
 
 impl<'gc> MouseData<'gc> {
@@ -144,6 +169,8 @@ impl<'gc> MouseData<'gc> {
 #[derive(Collect)]
 #[collect(no_drop)]
 struct GcRootData<'gc> {
+    root_swf: SwfMovie<'gc>,
+
     library: Library<'gc>,
 
     /// The root of the display object hierarchy.
@@ -223,6 +250,7 @@ impl<'gc> GcRootData<'gc> {
         &mut self,
     ) -> (
         Stage<'gc>,
+        &mut SwfMovie<'gc>,
         &mut Library<'gc>,
         &mut ActionQueue<'gc>,
         &mut AvmStringInterner<'gc>,
@@ -248,6 +276,7 @@ impl<'gc> GcRootData<'gc> {
     ) {
         (
             self.stage,
+            &mut self.root_swf,
             &mut self.library,
             &mut self.action_queue,
             &mut self.interner,
@@ -304,8 +333,6 @@ pub struct Player {
     /// Whether we're emulating the release or the debug build.
     player_mode: PlayerMode,
 
-    swf: Arc<SwfMovie>,
-
     run_state: RunState,
     needs_render: bool,
 
@@ -316,6 +343,7 @@ pub struct Player {
     log: Box<dyn LogBackend>,
     ui: Box<dyn UiBackend>,
     video: Box<dyn VideoBackend>,
+    locale: Box<dyn LocaleBackend>,
 
     transform_stack: TransformStack,
 
@@ -625,6 +653,10 @@ impl Player {
         self.mouse_in_stage = is_in;
     }
 
+    pub fn mouse_cursor(&self) -> MouseCursor {
+        self.mouse_cursor
+    }
+
     /// Returns the master volume of the player. 1.0 is 100% volume.
     ///
     /// The volume is linear and not adapted for logarithmic hearing.
@@ -859,7 +891,12 @@ impl Player {
             .root_clip()
             .and_then(|root| root.as_movie_clip())
         {
-            mc.goto_frame(context, 1, true)
+            let goto_info = GotoInfo {
+                frame: 1,
+                stop_or_play: StopOrPlay::Stop,
+            };
+
+            mc.goto_frame(context, goto_info);
         }
     }
     fn forward_root_movie(context: &mut UpdateContext<'_>) {
@@ -948,7 +985,11 @@ impl Player {
         self.mutate_with_update_context(|context| {
             context.renderer.set_viewport_dimensions(dimensions);
             context.stage.build_matrices(context);
-        })
+        });
+
+        // Flash Player renders right away when the viewport is resized,
+        // without waiting for the next frame.
+        self.needs_render = true;
     }
 
     pub fn set_show_menu(&mut self, show_menu: bool) {
@@ -1421,16 +1462,16 @@ impl Player {
             self.needs_render = true;
         }
 
-        if self.should_reset_highlight(event) {
-            self.mutate_with_update_context(|context| {
+        self.mutate_with_update_context(|context| {
+            if Self::should_reset_highlight(context, event) {
                 context.focus_tracker.reset_highlight();
-            });
-        }
+            }
+        });
 
         player_event_handled
     }
 
-    fn should_reset_highlight(&self, event: InputEvent) -> bool {
+    fn should_reset_highlight(context: &mut UpdateContext<'_>, event: InputEvent) -> bool {
         if matches!(
             event,
             InputEvent::MouseDown {
@@ -1442,7 +1483,7 @@ impl Player {
             return true;
         }
 
-        if self.swf.version() < 9
+        if context.root_swf.version() < 9
             && matches!(
                 event,
                 InputEvent::MouseDown {
@@ -1463,6 +1504,10 @@ impl Player {
 
     /// Update dragged object, if any.
     pub fn update_drag(context: &mut UpdateContext<'_>) {
+        if context.mouse_data.updating_drop_target {
+            // Prevent stack overflow.
+            return;
+        }
         let mouse_position = *context.mouse_position;
         if let Some(drag_object) = context.drag_object {
             let display_object = drag_object.display_object;
@@ -1505,7 +1550,9 @@ impl Player {
                 let was_visible = display_object.visible();
                 display_object.set_visible(context, false);
                 // Set `_droptarget` to the object the mouse is hovering over.
+                context.mouse_data.updating_drop_target = true;
                 let drop_target_object = run_mouse_pick(context, false);
+                context.mouse_data.updating_drop_target = false;
                 movie_clip.set_drop_target(
                     context.gc(),
                     drop_target_object.map(|d| d.as_displayobject()),
@@ -1730,21 +1777,26 @@ impl Player {
                     }
                     // Rolled over the new object.
                     if let Some(new_over_object) = new_over_object {
-                        new_cursor = new_over_object.mouse_cursor(context);
                         events.push((
                             new_over_object,
                             ClipEvent::RollOver {
                                 from: cur_over_object,
                             },
                         ));
-                    } else {
-                        new_cursor = MouseCursor::Arrow;
                     }
                 }
             }
             if !skip_mouse_hover && !new_over_object_updated {
                 context.mouse_data.hovered = new_over_object;
             }
+
+            // This needs set even when the new_over_object hasn't changed,
+            // so that the forced cursor, if previously set, can reset properly.
+            if is_mouse_moved && context.mouse_data.forced_cursor.is_none() {
+                new_cursor =
+                    new_over_object.map_or(MouseCursor::Arrow, |o| o.mouse_cursor(context));
+            }
+
             // Handle presses and releases.
             for button in [MouseButton::Left, MouseButton::Middle, MouseButton::Right] {
                 if !changed_mouse_buttons.contains(button) {
@@ -1879,6 +1931,13 @@ impl Player {
                 }
                 refresh
             };
+
+            // A cursor forced through `flash.ui.Mouse.cursor`
+            // overrides the automatic cursor.
+            if let Some(forced) = context.mouse_data.forced_cursor {
+                new_cursor = forced;
+            }
+
             Self::run_actions(context);
             needs_render
         });
@@ -1920,10 +1979,13 @@ impl Player {
     }
 
     //Checks if two displayObjects have the same depth and id and accur in the same movie.s
-    fn check_display_object_equality(object1: DisplayObject, object2: DisplayObject) -> bool {
+    fn check_display_object_equality<'gc>(
+        object1: DisplayObject<'gc>,
+        object2: DisplayObject<'gc>,
+    ) -> bool {
         object1.depth() == object2.depth()
             && object1.id() == object2.id()
-            && Arc::ptr_eq(&object1.movie(), &object2.movie())
+            && SwfMovie::ptr_eq(&object1.movie(), &object2.movie())
     }
     ///This searches for a display object by it's id.
     ///When a button is being held down but the mouse stops hovering over the object
@@ -2055,7 +2117,8 @@ impl Player {
                 commands: CommandList::new(),
                 cache_draws: &mut cache_draws,
                 gc_context,
-                library: &gc_root.library,
+                library: &mut gc_root.library,
+                ui: this.ui.deref(),
                 transform_stack: &mut this.transform_stack,
                 is_offscreen: false,
                 use_bitmap_cache: true,
@@ -2079,6 +2142,9 @@ impl Player {
                 };
 
             let commands = render_context.commands;
+
+            gc_root.library.sweep_font_caches();
+
             (cache_draws, commands)
         });
 
@@ -2158,8 +2224,9 @@ impl Player {
 
             match action.action_type {
                 // DoAction/clip event code.
-                ActionType::Normal { bytecode } | ActionType::Initialize { bytecode } => {
-                    Avm1::run_stack_frame_for_action(action.clip, "[Frame]", bytecode, context);
+                ActionType::Normal { bytecode, name }
+                | ActionType::Initialize { bytecode, name } => {
+                    Avm1::run_stack_frame_for_action(action.clip, name, bytecode, context);
                 }
                 // Change the prototype of a MovieClip and run constructor events.
                 ActionType::Construct {
@@ -2235,6 +2302,7 @@ impl Player {
             #[allow(unused_variables)]
             let (
                 stage,
+                root_swf,
                 library,
                 action_queue,
                 interner,
@@ -2262,7 +2330,7 @@ impl Player {
             let mut update_context = UpdateContext {
                 player_version: this.player_version,
                 player_mode: this.player_mode,
-                root_swf: &mut this.swf,
+                root_swf,
                 library,
                 rng: &mut this.rng,
                 renderer: this.renderer.deref_mut(),
@@ -2285,6 +2353,7 @@ impl Player {
                 storage: this.storage.deref_mut(),
                 log: this.log.deref_mut(),
                 video: this.video.deref_mut(),
+                locale: this.locale.deref_mut(),
                 avm1_shared_objects,
                 avm2_shared_objects,
                 unbound_text_fields,
@@ -2322,7 +2391,6 @@ impl Player {
             let ret = f(&mut update_context);
 
             // If we changed the framerate, let the audio handler now.
-            #[expect(clippy::float_cmp)]
             if *update_context.frame_rate != prev_frame_rate {
                 update_context
                     .audio
@@ -2564,7 +2632,7 @@ impl Drop for Player {
 
 /// Player factory, which can be used to configure the aspects of a Ruffle player.
 pub struct PlayerBuilder {
-    movie: Option<SwfMovie>,
+    movie: Option<SwfMovieData>,
 
     // Backends
     audio: Option<Box<dyn AudioBackend>>,
@@ -2574,6 +2642,7 @@ pub struct PlayerBuilder {
     storage: Option<Box<dyn StorageBackend>>,
     ui: Option<Box<dyn UiBackend>>,
     video: Option<Box<dyn VideoBackend>>,
+    locale: Option<Box<dyn LocaleBackend>>,
 
     // Notifications
     notification_sender: Option<Sender<PlayerNotification>>,
@@ -2627,6 +2696,7 @@ impl PlayerBuilder {
             storage: None,
             ui: None,
             video: None,
+            locale: None,
 
             notification_sender: None,
 
@@ -2669,7 +2739,7 @@ impl PlayerBuilder {
 
     /// Configures the player to play an already-loaded movie.
     #[inline]
-    pub fn with_movie(mut self, movie: SwfMovie) -> Self {
+    pub fn with_movie(mut self, movie: SwfMovieData) -> Self {
         self.movie = Some(movie);
         self
     }
@@ -2734,6 +2804,13 @@ impl PlayerBuilder {
     #[inline]
     pub fn with_video(mut self, video: impl 'static + VideoBackend) -> Self {
         self.video = Some(Box::new(video));
+        self
+    }
+
+    /// Sets the locale backend of the player.
+    #[inline]
+    pub fn with_locale(mut self, locale: impl 'static + LocaleBackend) -> Self {
+        self.locale = Some(Box::new(locale));
         self
     }
 
@@ -2896,7 +2973,6 @@ impl PlayerBuilder {
         player_version: u8,
         player_runtime: PlayerRuntime,
         fullscreen: bool,
-        fake_movie: Arc<SwfMovie>,
         external_interface_provider: Option<Box<dyn ExternalInterfaceProvider>>,
         fs_command_provider: Box<dyn FsCommandProvider>,
     ) -> GcRoot<'gc> {
@@ -2911,6 +2987,8 @@ impl PlayerBuilder {
                 Avm2::new(&mut init, player_version, player_runtime),
             )
         };
+
+        let fake_movie = SwfMovie::new(gc_context, SwfMovieData::empty(player_version, None));
 
         let data = GcRootData {
             audio_manager: AudioManager::new(),
@@ -2927,14 +3005,19 @@ impl PlayerBuilder {
             library: Library::empty(),
             load_manager: LoadManager::new(),
             mouse_data: MouseData {
+                custom_cursors: FnvHashSet::default(),
+                current_custom_cursor: None,
                 hovered: None,
                 pressed: None,
                 right_pressed: None,
                 middle_pressed: None,
+                forced_cursor: None,
+                updating_drop_target: false,
             },
             avm1_shared_objects: HashMap::new(),
             avm2_shared_objects: HashMap::new(),
             stage: Stage::empty(gc_context, fullscreen, fake_movie),
+            root_swf: fake_movie,
             timers: Timers::new(),
             unbound_text_fields: Vec::new(),
             stream_manager: StreamManager::new(),
@@ -2981,12 +3064,14 @@ impl PlayerBuilder {
         let video = self
             .video
             .unwrap_or_else(|| Box::new(null::NullVideoBackend::new()));
+        let locale = self
+            .locale
+            .unwrap_or_else(|| Box::new(locale::DefaultLocaleBackend::new()));
 
         let player_version = self.player_version.unwrap_or(DEFAULT_PLAYER_VERSION);
         let language = ui.language();
 
         // Instantiate the player.
-        let fake_movie = Arc::new(SwfMovie::empty(player_version, None));
         let frame_rate = self.frame_rate.unwrap_or(12.0);
         let forced_frame_rate = self.frame_rate.is_some();
         let player = Arc::new_cyclic(|self_ref| {
@@ -2999,9 +3084,9 @@ impl PlayerBuilder {
                 storage,
                 ui,
                 video,
+                locale,
 
                 // SWF info
-                swf: fake_movie.clone(),
                 current_frame: None,
 
                 // Timing
@@ -3056,7 +3141,6 @@ impl PlayerBuilder {
                         player_version,
                         self.player_runtime,
                         self.fullscreen,
-                        fake_movie.clone(),
                         self.external_interface_provider,
                         self.fs_command_provider,
                     )

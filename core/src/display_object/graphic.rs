@@ -19,7 +19,6 @@ use ruffle_common::utils::HasPrefixField;
 use ruffle_render::backend::ShapeHandle;
 use ruffle_render::commands::CommandHandler;
 use std::cell::{OnceCell, RefCell, RefMut};
-use std::sync::Arc;
 
 #[derive(Clone, Collect, Copy)]
 #[collect(no_drop)]
@@ -38,7 +37,7 @@ impl fmt::Debug for Graphic<'_> {
 #[repr(C, align(8))]
 pub struct GraphicData<'gc> {
     base: DisplayObjectBase<'gc>,
-    shared: Lock<Gc<'gc, GraphicShared>>,
+    shared: Lock<Gc<'gc, GraphicShared<'gc>>>,
     class: Lock<Option<Avm2ClassObject<'gc>>>,
     avm2_object: Lock<Option<Avm2StageObject<'gc>>>,
     /// This is lazily allocated on demand, to make `GraphicData` smaller in the common case.
@@ -51,17 +50,12 @@ impl<'gc> Graphic<'gc> {
     pub fn from_swf_tag(
         context: &mut UpdateContext<'gc>,
         swf_shape: swf::Shape,
-        movie: Arc<SwfMovie>,
+        movie: SwfMovie<'gc>,
     ) -> Self {
-        let library = context.library.library_for_movie(movie.clone()).unwrap();
         let shared = GraphicShared {
             id: swf_shape.id,
-            bounds: swf_shape.shape_bounds,
-            render_handle: Some(
-                context
-                    .renderer
-                    .register_shape((&swf_shape).into(), &MovieLibrarySource { library }),
-            ),
+            shape_bounds: swf_shape.shape_bounds,
+            edge_bounds: swf_shape.edge_bounds,
             shape: swf_shape,
             movie,
             scaled_handle: RefCell::new(TessellationCache::new()),
@@ -83,8 +77,8 @@ impl<'gc> Graphic<'gc> {
     pub fn empty(context: &mut UpdateContext<'gc>) -> Self {
         let shared = GraphicShared {
             id: 0,
-            bounds: Default::default(),
-            render_handle: None,
+            shape_bounds: Default::default(),
+            edge_bounds: Default::default(),
             shape: swf::Shape {
                 version: 32,
                 id: 0,
@@ -97,7 +91,7 @@ impl<'gc> Graphic<'gc> {
                 },
                 shape: Vec::new(),
             },
-            movie: context.root_swf.clone(),
+            movie: *context.root_swf,
             scaled_handle: RefCell::new(TessellationCache::new()),
         };
 
@@ -113,6 +107,10 @@ impl<'gc> Graphic<'gc> {
         ))
     }
 
+    pub fn instantiate(self, mc: &Mutation<'gc>) -> Self {
+        Self(Gc::new(mc, (*self.0).clone()))
+    }
+
     pub fn drawing_mut(&self) -> RefMut<'_, Drawing> {
         self.0.drawing.get_or_init(Default::default).borrow_mut()
     }
@@ -121,15 +119,17 @@ impl<'gc> Graphic<'gc> {
         unlock!(Gc::write(mc, self.0), GraphicData, class).set(Some(class));
     }
 
-    fn set_shared(self, mc: &Mutation<'gc>, shared: Gc<'gc, GraphicShared>) {
+    fn set_shared(self, mc: &Mutation<'gc>, shared: Gc<'gc, GraphicShared<'gc>>) {
         unlock!(Gc::write(mc, self.0), GraphicData, shared).set(shared);
     }
 
-    /// Returns the best shape handle for the current scale, retessellating if necessary.
+    /// Returns the best shape handle for the current scale, tessellating if necessary.
+    ///
+    /// Shapes are not tessellated when they are defined: the first draw tessellates
+    /// at the scale it is drawn at.
     fn get_or_retessellate_handle(
         self,
-        context: &mut RenderContext,
-        base_handle: &ShapeHandle,
+        context: &mut RenderContext<'_, 'gc>,
         current_scale: f32,
     ) -> ShapeHandle {
         // Since graphics are created from a shared shape, we may be able to reuse a
@@ -144,30 +144,29 @@ impl<'gc> Graphic<'gc> {
             }
         }
 
-        // Retessellate at the new scale
-        let library = context.library.library_for_movie(shared.movie.clone());
-        if let Some(library) = library {
-            let new_handle = context.renderer.register_shape_with_scale(
-                (&shared.shape).into(),
-                &MovieLibrarySource { library },
+        // Tessellate at the current scale
+        let library = context
+            .library
+            .library_for_movie(shared.movie)
+            .expect("Graphic's movie has a library");
+        let new_handle = context.renderer.register_shape_with_scale(
+            (&shared.shape).into(),
+            &MovieLibrarySource { library },
+            current_scale,
+        );
+
+        {
+            let mut cache = shared.scaled_handle.borrow_mut();
+            tracing::debug!(
+                "Graphic id={} retessellated: new_scale={:.2}, cache_size={}",
+                shared.id,
                 current_scale,
+                cache.len()
             );
-
-            {
-                let mut cache = shared.scaled_handle.borrow_mut();
-                tracing::debug!(
-                    "Graphic id={} retessellated: new_scale={:.2}, cache_size={}",
-                    shared.id,
-                    current_scale,
-                    cache.len()
-                );
-                cache.insert(current_scale, new_handle.clone());
-            }
-
-            new_handle
-        } else {
-            base_handle.clone()
+            cache.insert(current_scale, new_handle.clone());
         }
+
+        new_handle
     }
 }
 
@@ -176,19 +175,19 @@ impl<'gc> TDisplayObject<'gc> for Graphic<'gc> {
         HasPrefixField::as_prefix_gc(self.0)
     }
 
-    fn instantiate(self, gc_context: &Mutation<'gc>) -> DisplayObject<'gc> {
-        Self(Gc::new(gc_context, self.0.as_ref().clone())).into()
-    }
-
     fn id(self) -> CharacterId {
         self.0.shared.get().id
     }
 
-    fn self_bounds(self, _mode: BoundsMode) -> Rectangle<Twips> {
+    fn self_bounds(self, mode: BoundsMode) -> Rectangle<Twips> {
+        let include_strokes = mode.includes_strokes();
+
         if let Some(drawing) = self.0.drawing.get() {
-            drawing.borrow().self_bounds()
+            drawing.borrow().self_bounds(include_strokes)
+        } else if include_strokes {
+            self.0.shared.get().shape_bounds
         } else {
-            self.0.shared.get().bounds
+            self.0.shared.get().edge_bounds
         }
     }
 
@@ -237,7 +236,7 @@ impl<'gc> TDisplayObject<'gc> for Graphic<'gc> {
         self.invalidate_cached_bitmap();
     }
 
-    fn render_self(self, context: &mut RenderContext) {
+    fn render_self(self, context: &mut RenderContext<'_, 'gc>) {
         if !context.is_offscreen
             && !self
                 .world_bounds(BoundsMode::Engine)
@@ -249,7 +248,7 @@ impl<'gc> TDisplayObject<'gc> for Graphic<'gc> {
 
         if let Some(drawing) = self.0.drawing.get() {
             drawing.borrow().render(context);
-        } else if let Some(base_handle) = self.0.shared.get().render_handle.clone() {
+        } else if !self.0.shared.get().shape.shape.is_empty() {
             let transform = context.transform_stack.transform();
 
             // Calculate the current scale from the transform, to determine if
@@ -259,7 +258,7 @@ impl<'gc> TDisplayObject<'gc> for Graphic<'gc> {
             let scale_y = f32::abs(matrix.b + matrix.d);
             let current_scale = ((scale_x * scale_x + scale_y * scale_y) / 2.0).sqrt();
 
-            let handle = self.get_or_retessellate_handle(context, &base_handle, current_scale);
+            let handle = self.get_or_retessellate_handle(context, current_scale);
 
             context.commands.render_shape(handle, transform)
         }
@@ -304,8 +303,8 @@ impl<'gc> TDisplayObject<'gc> for Graphic<'gc> {
         }
     }
 
-    fn movie(self) -> Arc<SwfMovie> {
-        self.0.shared.get().movie.clone()
+    fn movie(self) -> SwfMovie<'gc> {
+        self.0.shared.get().movie
     }
 
     fn object1(self) -> Option<Avm1Object<'gc>> {
@@ -328,13 +327,20 @@ impl<'gc> TDisplayObject<'gc> for Graphic<'gc> {
 
 /// Data shared between all instances of a Graphic.
 #[derive(Collect)]
-#[collect(require_static)]
-struct GraphicShared {
+#[collect(no_drop)]
+struct GraphicShared<'gc> {
+    movie: SwfMovie<'gc>,
     id: CharacterId,
+
+    #[collect(require_static)]
     shape: swf::Shape,
-    render_handle: Option<ShapeHandle>,
-    bounds: Rectangle<Twips>,
-    movie: Arc<SwfMovie>,
+
+    #[collect(require_static)]
+    shape_bounds: Rectangle<Twips>,
+
+    #[collect(require_static)]
+    edge_bounds: Rectangle<Twips>,
+
     #[collect(require_static)]
     scaled_handle: RefCell<TessellationCache>,
 }

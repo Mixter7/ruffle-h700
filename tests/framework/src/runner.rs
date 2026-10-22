@@ -2,12 +2,15 @@ mod automation;
 mod image_test;
 mod trace;
 
-use crate::backends::{TestAudioBackend, TestLogBackend, TestNavigatorBackend, TestUiBackend};
+use crate::backends::{
+    TestAudioBackend, TestLogBackend, TestNavigatorBackend, TestStorageBackend, TestUiBackend,
+};
 use crate::environment::RenderInterface;
 use crate::fs_commands::{FsCommand, TestFsCommandProvider};
 use crate::image_trigger::ImageTrigger;
 use crate::options::image_comparison::ImageComparison;
 use crate::options::known_failure::KnownFailure;
+use crate::options::shared_object::check_shared_objects;
 use crate::options::{AudioAssertion, TestOptions};
 use crate::runner::automation::perform_automated_event;
 use crate::runner::image_test::capture_and_compare_image;
@@ -15,9 +18,10 @@ use crate::runner::trace::compare_trace_output;
 use crate::test::Test;
 use anyhow::{Result, anyhow};
 use ruffle_core::FloatDuration;
+use ruffle_core::backend::locale::DeterministicLocaleBackend;
 use ruffle_core::backend::navigator::NullExecutor;
 use ruffle_core::limits::ExecutionLimit;
-use ruffle_core::tag_utils::SwfMovie;
+use ruffle_core::tag_utils::SwfMovieData;
 use ruffle_core::{Player, PlayerBuilder};
 use ruffle_input_format::InputInjector;
 use ruffle_render::backend::{RenderBackend, ViewportDimensions};
@@ -58,7 +62,7 @@ pub struct TestRunner {
 impl TestRunner {
     pub fn new(
         test: &Test,
-        movie: SwfMovie,
+        movie: SwfMovieData,
         injector: InputInjector,
         socket_events: Option<Vec<SocketEvent>>,
         renderer: Option<(Box<dyn RenderInterface>, Box<dyn RenderBackend>)>,
@@ -93,9 +97,15 @@ impl TestRunner {
         let mut builder = PlayerBuilder::new()
             .with_log(log.clone())
             .with_navigator(navigator)
+            .with_locale(DeterministicLocaleBackend::default())
+            .with_storage(Box::new(TestStorageBackend::new()))
             .with_max_execution_duration(Duration::from_secs(300))
             .with_fs_commands(Box::new(fs_command_provider))
-            .with_ui(TestUiBackend::new(test.fonts()?, test.font_sorts()))
+            .with_ui(TestUiBackend::new(
+                test.fonts()?,
+                test.font_sorts(),
+                test.options.player_options.device_font_renderer(),
+            ))
             .with_viewport_dimensions(
                 viewport_dimensions.width,
                 viewport_dimensions.height,
@@ -376,6 +386,9 @@ impl TestRunner {
             ));
         }
 
+        if !self.options.shared_objects.is_empty() {
+            check_shared_objects(&self.player, &self.options.shared_objects, &self.root_path)?;
+        }
         self.executor.run();
 
         compare_trace_output(

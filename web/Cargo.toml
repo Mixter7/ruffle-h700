@@ -46,19 +46,19 @@ ruffle_render_wgpu = { path = "../render/wgpu", optional = true }
 ruffle_video_external = { path = "../video/external", features = ["webcodecs"] }
 url = { workspace = true }
 wasm-bindgen = { workspace = true }
-wasm-bindgen-futures = "0.4.70"
+wasm-bindgen-futures = "0.4.77"
 serde-wasm-bindgen = "0.6.5"
 chrono = { workspace = true, features = ["wasmbind", "clock"] }
 serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
-base64 = "0.22.1"
+base64 = "0.23.1"
 async-channel = { workspace = true }
 futures-util = { version = "0.3.30", features = ["sink"] }
 gloo-net =  { version = "0.7.0", default-features = false, features = ["websocket"] }
 rfd = { workspace = true, features = ["file-handle-inner"] }
 wasm-streams = "0.5.0"
 futures = { workspace = true }
-zip = { version = "8.6.0", default-features = false }
+zip = { workspace = true }
 
 [dependencies.ruffle_core]
 path = "../core"
@@ -77,12 +77,10 @@ features = [
     "TextMetrics", "OffscreenCanvasRenderingContext2d"
 ]
 
-[target.'cfg(target_family = "wasm")'.dependencies.getrandom]
-version = "0.3"
-features = ["wasm_js"]
+[target.'cfg(target_family = "wasm")'.dependencies]
+getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
+getrandom = { version = "0.4", features = ["wasm_js"] }
 
+# Not used directly, declared only to enable its `wasm_js` feature on WASM.
 [package.metadata.cargo-machete]
-ignored = [
-    # Not used directly, declared only to enable its `wasm_js` feature on WASM.
-    "getrandom"
-]
+ignored = ["getrandom", "getrandom_03"]

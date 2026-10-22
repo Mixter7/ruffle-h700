@@ -3,23 +3,26 @@ use crate::avm2::Error;
 use crate::avm2::TObject as _;
 use crate::avm2::Value;
 use crate::avm2::error::{
-    make_error_2008, make_error_3669, make_error_3670, make_error_3671, make_error_3771,
-    make_error_3772, make_error_3773, make_error_3780, make_error_3781,
+    make_error_2008, make_error_3669, make_error_3670, make_error_3671, make_error_3692,
+    make_error_3771, make_error_3772, make_error_3773, make_error_3780, make_error_3781,
 };
-use crate::avm2::globals::methods::flash_geom_matrix_3d as matrix3d_methods;
-use crate::avm2::globals::slots::flash_geom_matrix_3d as matrix3d_slots;
+use crate::avm2::function::FunctionArgs;
 use crate::avm2::globals::slots::flash_geom_rectangle as rectangle_slots;
 use crate::avm2::parameters::ParametersExt;
 use crate::avm2_stub_method;
 use ruffle_macros::istr;
 use ruffle_render::backend::BufferUsage;
 use ruffle_render::backend::{Context3DProfile, Context3DTextureFilter};
+use ruffle_render::bitmap::{PixelRegion, PixelSnapping};
+use ruffle_render::commands::{CommandHandler, CommandList};
+use ruffle_render::quality::StageQuality;
+use ruffle_render::transform::Transform;
 use swf::{Rectangle, Twips};
 
 pub fn create_index_buffer<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -39,7 +42,7 @@ pub fn create_index_buffer<'gc>(
 pub fn create_vertex_buffer<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -67,7 +70,7 @@ pub fn create_vertex_buffer<'gc>(
 pub fn configure_back_buffer<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -134,7 +137,7 @@ pub fn configure_back_buffer<'gc>(
 pub fn set_vertex_buffer_at<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -164,7 +167,7 @@ pub fn set_vertex_buffer_at<'gc>(
 pub fn create_program<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -177,7 +180,7 @@ pub fn create_program<'gc>(
 pub fn set_program<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -191,7 +194,7 @@ pub fn set_program<'gc>(
 pub fn draw_triangles<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -212,7 +215,7 @@ pub fn draw_triangles<'gc>(
 pub fn present<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -222,10 +225,75 @@ pub fn present<'gc>(
     Ok(Value::Undefined)
 }
 
+pub fn draw_to_bitmap_data<'gc>(
+    activation: &mut Activation<'_, 'gc>,
+    this: Value<'gc>,
+    args: FunctionArgs<'_, 'gc>,
+) -> Result<Value<'gc>, Error<'gc>> {
+    let this = this.as_object().unwrap();
+
+    if let Some(context) = this.as_context_3d() {
+        let destination = args
+            .get_object(activation, 0, "destination")?
+            .as_bitmap_data()
+            .unwrap();
+
+        // Before the back buffer is configured, Flash silently does nothing.
+        let Some(source_handle) = context.with_context_3d(|ctx| ctx.back_buffer_handle()) else {
+            return Ok(Value::Undefined);
+        };
+
+        // Flash requires every buffer to be cleared each frame before drawing.
+        // `present` resets that state, so reading the back buffer with no
+        // intervening `clear` throws Error #3692, just like `drawTriangles`.
+        if !context.with_context_3d(|ctx| ctx.buffers_cleared()) {
+            return Err(make_error_3692(activation));
+        }
+
+        // Read the current back buffer (the content rendered since the last
+        // `present`), matching Flash's `drawToBitmapData`. Blit it into the
+        // destination BitmapData's GPU target, then mark it dirty so the pixels
+        // are read back on next access.
+        let (source_width, source_height) = context
+            .with_context_3d(|ctx| ctx.back_buffer_size())
+            .unwrap_or_default();
+
+        let mut commands = CommandList::new();
+        commands.render_bitmap(
+            source_handle,
+            Transform::default(),
+            false,
+            PixelSnapping::Never,
+            PixelRegion::for_whole_size(source_width, source_height),
+        );
+
+        let handle = destination.bitmap_handle(activation.gc(), activation.context.renderer);
+
+        let (destination, _) = destination.overwrite_cpu_pixels_from_gpu(activation.gc());
+        let mut write = destination.borrow_mut(activation.gc());
+
+        let dirty_region = PixelRegion::for_whole_size(write.width(), write.height());
+
+        let image = activation.context.renderer.render_offscreen(
+            handle,
+            commands,
+            StageQuality::High,
+            dirty_region,
+        );
+
+        if let Some(sync_handle) = image {
+            write.set_gpu_dirty(activation.gc(), sync_handle, dirty_region);
+        } else {
+            return Err("Render backend does not support Context3D.drawToBitmapData".into());
+        }
+    }
+    Ok(Value::Undefined)
+}
+
 pub fn get_profile<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -247,7 +315,7 @@ pub fn get_profile<'gc>(
 pub fn set_culling<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -265,7 +333,7 @@ pub fn set_culling<'gc>(
 pub fn set_program_constants_from_matrix<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -277,7 +345,11 @@ pub fn set_program_constants_from_matrix<'gc>(
 
         let first_register = args.get_u32(1);
 
-        let mut matrix = args.get_object(activation, 2, "matrix")?;
+        let mut matrix = args
+            .get_object(activation, 2, "matrix")?
+            .as_matrix3d_object()
+            .unwrap()
+            .matrix();
 
         let user_transposed_matrix = args.get_bool(3);
 
@@ -289,24 +361,13 @@ pub fn set_program_constants_from_matrix<'gc>(
         // in column-major order.
         // See https://github.com/openfl/openfl/blob/971a4c9e43b5472fd84d73920a2b7c1b3d8d9257/src/openfl/display3D/Context3D.hx#L1532-L1550
         if user_transposed_matrix {
-            matrix = Value::from(matrix)
-                .call_method(matrix3d_methods::CLONE, &[], activation)?
-                .as_object()
-                .expect("Matrix3D.clone returns Object");
-
-            Value::from(matrix).call_method(matrix3d_methods::TRANSPOSE, &[], activation)?;
+            matrix.transpose_in_place();
         }
 
         let matrix_raw_data = matrix
-            .get_slot(matrix3d_slots::_RAW_DATA)
-            .as_object()
-            .expect("rawData cannot be null");
-
-        let matrix_raw_data = matrix_raw_data
-            .as_vector_storage()
-            .unwrap()
+            .raw_data
             .iter()
-            .map(|val| (val.as_f64() as f32).to_le_bytes())
+            .map(|&val| val.to_le_bytes())
             .collect::<Vec<[u8; 4]>>();
 
         context.set_program_constants(program_type, first_register, &matrix_raw_data);
@@ -317,7 +378,7 @@ pub fn set_program_constants_from_matrix<'gc>(
 pub fn set_program_constants_from_vector<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -360,7 +421,7 @@ pub fn set_program_constants_from_vector<'gc>(
 pub fn set_program_constants_from_byte_array<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -406,7 +467,7 @@ pub fn set_program_constants_from_byte_array<'gc>(
 pub fn clear<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -428,7 +489,7 @@ pub fn clear<'gc>(
 pub fn create_texture<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -461,7 +522,7 @@ pub fn create_texture<'gc>(
 pub fn create_rectangle_texture<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -493,7 +554,7 @@ pub fn create_rectangle_texture<'gc>(
 pub fn create_cube_texture<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -521,7 +582,7 @@ pub fn create_cube_texture<'gc>(
 pub fn set_texture_at<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -552,7 +613,7 @@ pub fn set_texture_at<'gc>(
 pub fn set_color_mask<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -571,7 +632,7 @@ pub fn set_color_mask<'gc>(
 pub fn set_depth_test<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -591,7 +652,7 @@ pub fn set_depth_test<'gc>(
 pub fn set_blend_factors<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -615,7 +676,7 @@ pub fn set_blend_factors<'gc>(
 pub fn set_render_to_texture<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -674,7 +735,7 @@ pub fn set_render_to_texture<'gc>(
 pub fn set_stencil_actions<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -719,7 +780,7 @@ pub fn set_stencil_actions<'gc>(
 pub fn set_render_to_back_buffer<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -733,7 +794,7 @@ pub fn set_render_to_back_buffer<'gc>(
 pub fn set_stencil_reference_value<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -751,7 +812,7 @@ pub fn set_stencil_reference_value<'gc>(
 pub fn set_sampler_state_at<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -803,7 +864,7 @@ pub fn set_sampler_state_at<'gc>(
 pub fn set_scissor_rectangle<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -832,7 +893,7 @@ pub fn set_scissor_rectangle<'gc>(
 pub fn dispose<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 

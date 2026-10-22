@@ -18,7 +18,7 @@ use swf::avm2::read::Reader;
 use swf::avm2::types::{
     Index, MethodFlags as AbcMethodFlags, Multiname as AbcMultiname, Op as AbcOp,
 };
-use swf::error::Error as AbcReadError;
+use swf::error::AbcParseError;
 
 #[derive(Collect)]
 #[collect(no_drop)]
@@ -103,29 +103,32 @@ pub fn verify_method<'gc>(
     while let Some(i) = worklist.pop() {
         reader.seek_absolute(&body.code, i as usize);
         loop {
-            let previous_position = reader.pos(&body.code) as i32;
+            let previous_position = reader.pos(&body.code);
 
             // We've already verified this chunk of code, let's not run the logic again
-            if matches!(
-                byte_info.get(previous_position as usize),
-                Some(ByteInfo::OpStart(_))
-            ) {
+            if matches!(byte_info.get(previous_position), Some(ByteInfo::OpStart(_))) {
                 break;
             }
 
             let op = match reader.read_op() {
                 Ok(op) => op,
 
-                Err(AbcReadError::InvalidData(_)) => {
-                    // Invalid opcode
-                    return Err(make_error_1011(activation));
+                Err(AbcParseError::IllegalOpcode { opcode }) => {
+                    return Err(make_error_1011(
+                        activation,
+                        method,
+                        opcode,
+                        previous_position,
+                    ));
                 }
-                Err(AbcReadError::IoError(_)) => {
+                Err(AbcParseError::UnexpectedEof(_)) => {
                     // Code flow continued past end of method
                     return Err(make_error_1020(activation));
                 }
                 Err(_) => unreachable!(),
             };
+
+            let previous_position = previous_position as i32;
 
             if op_can_throw_error(&op) {
                 for (exception_index, exception) in body.exceptions.iter().enumerate() {
@@ -861,7 +864,9 @@ fn translate_op<'gc>(
             Op::SetSuper { multiname }
         }
         AbcOp::In => Op::In,
-        AbcOp::PushScope => Op::PushScope,
+        AbcOp::PushScope => Op::PushScope {
+            input_not_null: false,
+        },
         AbcOp::NewCatch { index } => Op::NewCatch {
             index: index.0 as usize,
         },

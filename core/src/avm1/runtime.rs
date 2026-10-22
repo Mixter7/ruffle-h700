@@ -1,6 +1,6 @@
 use crate::avm1::function::ExecutionReason;
-use crate::avm1::globals::as_broadcaster::BroadcasterFunctions;
-use crate::avm1::globals::{as_broadcaster, create_globals};
+use crate::avm1::globals::create_globals;
+use crate::avm1::globals::object::broadcast_internal;
 use crate::avm1::object::stage_object;
 use crate::avm1::property_map::PropertyMap;
 use crate::avm1::scope::Scope;
@@ -32,9 +32,6 @@ struct GlobalEnv<'gc> {
     /// System built-ins that we use internally to construct new objects.
     prototypes: avm1::globals::SystemPrototypes<'gc>,
 
-    /// Cached functions for the AsBroadcaster.
-    broadcaster_functions: BroadcasterFunctions<'gc>,
-
     /// The mappings between symbol names and constructors registered
     /// with `Object.registerClass()`. This is either case-sensitive or case-insensitive.
     constructor_registry: PropertyMap<'gc, Object<'gc>>,
@@ -42,11 +39,10 @@ struct GlobalEnv<'gc> {
 
 impl<'gc> GlobalEnv<'gc> {
     fn create(context: &mut StringContext<'gc>) -> Self {
-        let (prototypes, globals, broadcaster_functions) = create_globals(context);
+        let (prototypes, globals) = create_globals(context);
         Self {
             global_scope: Gc::new(context.gc(), Scope::from_global_object(globals)),
             prototypes,
-            broadcaster_functions,
             constructor_registry: PropertyMap::new(),
         }
     }
@@ -189,9 +185,8 @@ impl<'gc> Avm1<'gc> {
         }
 
         let constant_pool = context.avm1.constant_pool;
-        // Let's do this once for swf 6 (case sensitive) and once for swf 7 (case insensitive),
-        // as we keep separate _global objects around for those two cases.
-        for swf_version in [6, 7] {
+        // Initialize the playerglobal SWF in both case-sensitive and case-insensitive environments.
+        for swf_version in [6, 8] {
             let mut child_activation = Activation::from_action(
                 context,
                 ActivationIdentifier::root("playerglobal"),
@@ -329,8 +324,7 @@ impl<'gc> Avm1<'gc> {
             .unwrap();
 
         let has_listener =
-            as_broadcaster::broadcast_internal(broadcaster, args, method, &mut activation)
-                .unwrap_or(false);
+            broadcast_internal(broadcaster, args, method, &mut activation).unwrap_or(false);
         drop(activation);
 
         if &broadcaster_name == b"Mouse" {
@@ -437,14 +431,6 @@ impl<'gc> Avm1<'gc> {
 
     pub fn set_max_recursion_depth(&mut self, max_recursion_depth: u16) {
         self.max_recursion_depth = max_recursion_depth
-    }
-
-    pub fn broadcaster_functions(&self, swf_version: u8) -> BroadcasterFunctions<'gc> {
-        if Self::is_case_sensitive(swf_version) {
-            self.env_case_sensitive.broadcaster_functions
-        } else {
-            self.env_case_insensitive.broadcaster_functions
-        }
     }
 
     /// The Flash Player version we're emulating.
@@ -581,6 +567,33 @@ impl<'gc> Avm1<'gc> {
         registry.get(symbol, is_case_sensitive).copied()
     }
 
+    /// Finds the class name associated with a given constructor function.
+    /// This is specifically required for AMF0 TypedObject serialization.
+    pub fn get_class_name_by_constructor(
+        &self,
+        swf_version: u8,
+        constructor: Object<'gc>,
+    ) -> Option<AvmString<'gc>> {
+        let is_case_sensitive = Self::is_case_sensitive(swf_version);
+        let registry = if is_case_sensitive {
+            &self.env_case_sensitive.constructor_registry
+        } else {
+            &self.env_case_insensitive.constructor_registry
+        };
+        // Iterate through the PropertyMap to find the matching constructor reference.
+        // If multiple aliases point to the same constructor, this will grab the one
+        // based on the PropertyMap's iteration order.
+        for (alias, registered_constructor) in registry.iter() {
+            // We compare by pointer identity because `Object.registerClass` associates
+            // a string with a specific Function object reference in memory. We need to
+            // verify it is the exact same object, not just an object with equal values.
+            if Object::ptr_eq(*registered_constructor, constructor) {
+                return Some(alias);
+            }
+        }
+        None
+    }
+
     pub fn register_constructor(
         &mut self,
         swf_version: u8,
@@ -594,6 +607,13 @@ impl<'gc> Avm1<'gc> {
             &mut self.env_case_insensitive.constructor_registry
         };
         if let Some(constructor) = constructor {
+            if !is_case_sensitive {
+                // In case-insensitive mode, PropertyMap updates the value but preserves
+                // the original casing of the key. Flash Player overwrites both.
+                // We must remove it first to ensure the new casing is stored.
+                // This is necessary for AMF0 serialization of TypedObjects.
+                registry.remove(symbol, is_case_sensitive);
+            }
             registry.insert(symbol, constructor, is_case_sensitive);
         } else {
             registry.remove(symbol, is_case_sensitive);
@@ -649,7 +669,7 @@ impl<'gc> Avm1<'gc> {
                 // Continue execution without halting.
                 return;
             }
-            Error::InvalidSwf(swf_error) => {
+            Error::InvalidBytecode(swf_error) => {
                 tracing::error!("{}: {}", error, swf_error);
             }
             _ => {

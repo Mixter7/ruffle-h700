@@ -30,6 +30,7 @@ jobs:
       upload_url: ${{ steps.create_release.outputs.upload_url }}
       package_prefix: ${{ steps.create_release.outputs.package_prefix }}
       tag_name: ${{ steps.commit.outputs.tag_name }}
+      version: ${{ steps.version.outputs.version }}
       version4: ${{ steps.version.outputs.version4 }}
       release_channel: ${{ steps.configure.outputs.release_channel }}
 
@@ -126,19 +127,24 @@ jobs:
             os: ubuntu-24.04
             DESKTOP_FEATURES: jpegxr,fontconfig-dlopen
 
+          - build_name: linux-i686
+            os: ubuntu-24.04
+            target: i686-unknown-linux-gnu
+            DESKTOP_FEATURES: jpegxr,fontconfig-dlopen
+
           - build_name: linux-aarch64
             os: ubuntu-24.04-arm
             DESKTOP_FEATURES: jpegxr,fontconfig-dlopen
 
           # Mac does two Rust builds to make a universal binary
           - build_name: macos-x86_64
-            os: macos-15
+            os: macos-26
             target: x86_64-apple-darwin
             MACOSX_DEPLOYMENT_TARGET: 10.7
             DESKTOP_FEATURES: sandbox,jpegxr,fontconfig-dlopen
 
           - build_name: macos-aarch64
-            os: macos-15
+            os: macos-26
             target: aarch64-apple-darwin
             MACOSX_DEPLOYMENT_TARGET: 11.0
             DESKTOP_FEATURES: sandbox,jpegxr,fontconfig-dlopen
@@ -174,11 +180,20 @@ jobs:
           toolchain: stable
           targets: ${{ matrix.target }}
 
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
+      - name: Install Linux x64 dependencies
+        if: runner.os == 'Linux' && matrix.target == ''
         run: |
           sudo apt-get update
-          sudo apt install -y libasound2-dev libudev-dev
+          sudo apt install -y $(cat .github/linux-dependencies.txt)
+
+      - name: Install Linux i386 dependencies
+        if: matrix.target == 'i686-unknown-linux-gnu'
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt install -y gcc-multilib $(sed 's/$/:i386/' .github/linux-dependencies.txt)
+          echo "PKG_CONFIG_ALLOW_CROSS=1" | tee -a $GITHUB_ENV
+          echo "PKG_CONFIG_LIBDIR=/usr/lib/i386-linux-gnu/pkgconfig" | tee -a $GITHUB_ENV
 
       - name: Install WiX
         if: runner.os == 'Windows'
@@ -256,8 +271,8 @@ jobs:
 
   build-mac-universal-binary:
     name: Build macOS universal binary
-    needs: [create-release, build, build-web]
-    runs-on: macos-15
+    needs: [ create-release, build, build-web ]
+    runs-on: macos-26
     env:
       PACKAGE_FILE: ${{ needs.create-release.outputs.package_prefix }}-macos-universal.tar.gz
     steps:
@@ -297,6 +312,13 @@ jobs:
           cp -r desktop/packages/macOS package/Ruffle.app
           mkdir package/Ruffle.app/Contents/MacOS
           mv package/ruffle package/Ruffle.app/Contents/MacOS/ruffle
+
+      - name: Set app version in plist
+        # This needs to be stable only because Apple doesn't support semver
+        if: needs.create-release.outputs.release_channel == 'stable'
+        run: |
+          plutil -replace CFBundleShortVersionString -string "${{ needs.create-release.outputs.version }}" package/Ruffle.app/Contents/Info.plist
+          plutil -replace CFBundleVersion -string "${{ needs.create-release.outputs.version }}" package/Ruffle.app/Contents/Info.plist
 
       - name: Compile asset catalog
         run: |
@@ -345,14 +367,17 @@ jobs:
           xcrun stapler staple package/Ruffle.app
 
       - name: Report notarization failure on Discord
-        uses: th0th/notify-discord@v0.4.1
+        uses: stegzilla/discord-notify@v5
         if: ${{ steps.notarize-bundle.outcome == 'failure' && github.repository == 'ruffle-rs/ruffle' }}
         continue-on-error: true
-        env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_UPDATES }}
-          GITHUB_ACTOR: ${{ github.actor }}
-          GITHUB_JOB_NAME: "Notarize macOS universal binary bundle"
-          GITHUB_JOB_STATUS: ${{ steps.notarize-bundle.outcome }}
+        with:
+          webhook_url: ${{ secrets.DISCORD_WEBHOOK_UPDATES }}
+          title: "macOS notarization failed"
+          message: |
+            Notarize macOS universal binary bundle step failed
+            [View workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          username: "GitHub Actions"
+          colour: "#fc2929"
 
       - name: Package macOS
         run: |
@@ -417,7 +442,7 @@ jobs:
           components: rust-src
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: "24"
           registry-url: https://registry.npmjs.org
@@ -426,7 +451,7 @@ jobs:
       # Be sure to update in test_web.yml, Cargo.toml, web/docker/Dockerfile,
       # and web/README.md as well.
       - name: Install wasm-bindgen
-        run: cargo install --locked wasm-bindgen-cli --version 0.2.120
+        run: cargo install --locked wasm-bindgen-cli --version 0.2.127
 
       # Keep the version number in sync in all workflows,
       # and in the extension builder Dockerfile!
@@ -512,12 +537,13 @@ jobs:
         continue-on-error: true
         env:
           CHROME_EXTENSION_ID: ${{ secrets.CHROME_EXTENSION_ID }}
-        uses: mnao305/chrome-extension-upload@v6.0.0
+        uses: mnao305/chrome-extension-upload@v7.0.0
         with:
           extension-id: ${{ secrets.CHROME_EXTENSION_ID }}
           client-id: ${{ secrets.CHROME_CLIENT_ID }}
           client-secret: ${{ secrets.CHROME_CLIENT_SECRET }}
           refresh-token: ${{ secrets.CHROME_REFRESH_TOKEN }}
+          publisher-id: ${{ secrets.CHROME_PUBLISHER_ID }}
           file-path: ./web/packages/extension/dist/ruffle_extension.zip
 
       - name: Publish Edge extension
@@ -662,7 +688,7 @@ jobs:
 
   publish-aur-package:
     name: Publish AUR package
-    needs: [create-release, build]
+    needs: [ create-release, build ]
     runs-on: ubuntu-24.04
     if: github.repository == 'ruffle-rs/ruffle' && needs.create-release.outputs.release_channel == 'nightly'
     steps:
@@ -697,7 +723,7 @@ jobs:
           -e "s/@SHA512SUM_aarch64@/$(sha512sum ${{ needs.create-release.outputs.package_prefix }}-linux-aarch64.tar.gz | cut -d' ' -f1)/"
 
       - name: Publish AUR package
-        uses: KSXGitHub/github-actions-deploy-aur@v4.1.3
+        uses: KSXGitHub/github-actions-deploy-aur@v4.2.0
         with:
           pkgname: ruffle-nightly-bin
           pkgbuild: desktop/packages/linux/aur/ruffle-nightly-bin/PKGBUILD

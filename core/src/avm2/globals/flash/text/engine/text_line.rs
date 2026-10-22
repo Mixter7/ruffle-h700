@@ -1,13 +1,16 @@
 use crate::avm2::activation::Activation;
 use crate::avm2::error::{Error, make_error_2008};
+use crate::avm2::function::FunctionArgs;
 use crate::avm2::parameters::ParametersExt;
 use crate::avm2::value::Value;
+use crate::display_object::TDisplayObject;
 use crate::fte::TextLineValidity;
+use ruffle_macros::istr;
 
 pub fn get_text_width<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
     let display_object = this.as_display_object().unwrap();
@@ -19,10 +22,50 @@ pub fn get_text_width<'gc>(
     Ok(measured_text.0.to_pixels().into())
 }
 
-pub fn get_validity<'gc>(
+pub fn get_has_tabs<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
+) -> Result<Value<'gc>, Error<'gc>> {
+    let this = this
+        .as_object()
+        .unwrap()
+        .as_display_object()
+        .unwrap()
+        .as_text_line()
+        .unwrap();
+
+    Ok(this.has_tabs().into())
+}
+
+pub fn get_ascent<'gc>(
+    _activation: &mut Activation<'_, 'gc>,
+    this: Value<'gc>,
+    _args: FunctionArgs<'_, 'gc>,
+) -> Result<Value<'gc>, Error<'gc>> {
+    let this = this.as_object().unwrap();
+    let display_object = this.as_display_object().unwrap();
+    let text_line = display_object.as_text_line().unwrap();
+
+    Ok(text_line.metrics().0.into())
+}
+
+pub fn get_descent<'gc>(
+    _activation: &mut Activation<'_, 'gc>,
+    this: Value<'gc>,
+    _args: FunctionArgs<'_, 'gc>,
+) -> Result<Value<'gc>, Error<'gc>> {
+    let this = this.as_object().unwrap();
+    let display_object = this.as_display_object().unwrap();
+    let text_line = display_object.as_text_line().unwrap();
+
+    Ok(text_line.metrics().1.into())
+}
+
+pub fn get_validity<'gc>(
+    activation: &mut Activation<'_, 'gc>,
+    this: Value<'gc>,
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
     let display_object = this.as_display_object().unwrap();
@@ -30,13 +73,21 @@ pub fn get_validity<'gc>(
         return Ok(Value::Undefined);
     };
 
-    Ok(text_line.validity().into())
+    let validity = match text_line.validity() {
+        TextLineValidity::Valid => istr!("valid"),
+        TextLineValidity::Invalid => istr!("invalid"),
+        TextLineValidity::Static => istr!("static"),
+        TextLineValidity::PossiblyInvalid => istr!("possiblyInvalid"),
+        TextLineValidity::UserInvalid(string) => string,
+    };
+
+    Ok(validity.into())
 }
 
 pub fn set_validity<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
     let display_object = this.as_display_object().unwrap();
@@ -46,8 +97,8 @@ pub fn set_validity<'gc>(
 
     let value = args.get_string_non_null(activation, 0, "validity")?;
 
-    let previous_value = TextLineValidity::parse(text_line.validity().as_wstr());
-    let new_value = TextLineValidity::parse(value.as_wstr());
+    let previous_value = text_line.validity();
+    let new_value = TextLineValidity::parse(value);
 
     let transition_allowed = match (previous_value, new_value) {
         (a, b) if a == b => true,
@@ -62,14 +113,120 @@ pub fn set_validity<'gc>(
         return Err(make_error_2008(activation, "validity"));
     }
 
-    text_line.set_validity(value, activation.context);
+    text_line.set_validity(new_value, activation.gc());
     Ok(Value::Undefined)
+}
+
+pub fn get_text_block<'gc>(
+    _activation: &mut Activation<'_, 'gc>,
+    this: Value<'gc>,
+    _args: FunctionArgs<'_, 'gc>,
+) -> Result<Value<'gc>, Error<'gc>> {
+    let this = this
+        .as_object()
+        .unwrap()
+        .as_display_object()
+        .unwrap()
+        .as_text_line()
+        .unwrap();
+
+    let block = this.text_block_from_script();
+
+    Ok(block.map(Value::from).unwrap_or(Value::Null))
+}
+
+pub fn get_specified_width<'gc>(
+    _activation: &mut Activation<'_, 'gc>,
+    this: Value<'gc>,
+    _args: FunctionArgs<'_, 'gc>,
+) -> Result<Value<'gc>, Error<'gc>> {
+    let this = this
+        .as_object()
+        .unwrap()
+        .as_display_object()
+        .unwrap()
+        .as_text_line()
+        .unwrap();
+
+    Ok(this.specified_width().into())
+}
+
+pub fn get_raw_text_length<'gc>(
+    _activation: &mut Activation<'_, 'gc>,
+    this: Value<'gc>,
+    _args: FunctionArgs<'_, 'gc>,
+) -> Result<Value<'gc>, Error<'gc>> {
+    let this = this
+        .as_object()
+        .unwrap()
+        .as_display_object()
+        .unwrap()
+        .as_text_line()
+        .unwrap();
+
+    Ok(this.raw_text_length().into())
+}
+
+pub fn get_text_block_begin_index<'gc>(
+    _activation: &mut Activation<'_, 'gc>,
+    this: Value<'gc>,
+    _args: FunctionArgs<'_, 'gc>,
+) -> Result<Value<'gc>, Error<'gc>> {
+    let this = this
+        .as_object()
+        .unwrap()
+        .as_display_object()
+        .unwrap()
+        .as_text_line()
+        .unwrap();
+
+    Ok(this.begin_index().into())
+}
+
+pub fn get_previous_line<'gc>(
+    _activation: &mut Activation<'_, 'gc>,
+    this: Value<'gc>,
+    _args: FunctionArgs<'_, 'gc>,
+) -> Result<Value<'gc>, Error<'gc>> {
+    let this = this
+        .as_object()
+        .unwrap()
+        .as_display_object()
+        .unwrap()
+        .as_text_line()
+        .unwrap();
+
+    Ok(this
+        .previous_line()
+        .and_then(|line| line.object2())
+        .map(Value::from)
+        .unwrap_or(Value::Null))
+}
+
+pub fn get_next_line<'gc>(
+    _activation: &mut Activation<'_, 'gc>,
+    this: Value<'gc>,
+    _args: FunctionArgs<'_, 'gc>,
+) -> Result<Value<'gc>, Error<'gc>> {
+    let this = this
+        .as_object()
+        .unwrap()
+        .as_display_object()
+        .unwrap()
+        .as_text_line()
+        .unwrap();
+
+    Ok(this
+        .next_line()
+        .and_then(|line| line.object2())
+        .map(Value::from)
+        .unwrap_or(Value::Null))
 }
 
 pub fn get_text_height<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
     let display_object = this.as_display_object().unwrap();

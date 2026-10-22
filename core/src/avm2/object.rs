@@ -11,6 +11,7 @@ use crate::avm2::domain::Domain;
 use crate::avm2::error::{self, make_error_2012};
 use crate::avm2::events::{DispatchList, Event};
 use crate::avm2::function::FunctionArgs;
+use crate::avm2::index::ArrayIndex;
 use crate::avm2::property::Property;
 use crate::avm2::regexp::RegExp;
 use crate::avm2::value::{Hint, Value};
@@ -31,6 +32,7 @@ mod array_object;
 mod bitmapdata_object;
 mod bytearray_object;
 mod class_object;
+mod collator_object;
 mod content_element_object;
 mod context3d_object;
 mod date_object;
@@ -47,6 +49,7 @@ mod function_object;
 mod index_buffer_3d_object;
 mod loaderinfo_object;
 mod local_connection_object;
+mod matrix3d_object;
 mod message_channel_object;
 mod namespace_object;
 mod net_connection_object;
@@ -86,8 +89,11 @@ pub use crate::avm2::object::bytearray_object::{
     ByteArrayObject, ByteArrayObjectWeak, byte_array_allocator,
 };
 pub use crate::avm2::object::class_object::{ClassObject, ClassObjectWeak};
+pub use crate::avm2::object::collator_object::{
+    CollatorObject, CollatorObjectWeak, CollatorOptions, LastOperationStatus, collator_allocator,
+};
 pub use crate::avm2::object::content_element_object::{
-    ContentElementObject, ContentElementObjectWeak, content_element_allocator,
+    ContentElementObject, ContentElementObjectWeak, ElementData, content_element_allocator,
 };
 pub use crate::avm2::object::context3d_object::{Context3DObject, Context3DObjectWeak};
 pub use crate::avm2::object::date_object::{DateObject, DateObjectWeak, date_allocator};
@@ -120,6 +126,9 @@ pub use crate::avm2::object::loaderinfo_object::{
 };
 pub use crate::avm2::object::local_connection_object::{
     LocalConnectionObject, LocalConnectionObjectWeak, local_connection_allocator,
+};
+pub use crate::avm2::object::matrix3d_object::{
+    Matrix3DObject, Matrix3DObjectWeak, matrix_3d_allocator,
 };
 pub use crate::avm2::object::message_channel_object::{
     MessageChannelObject, MessageChannelObjectWeak,
@@ -245,6 +254,8 @@ use crate::font::Font;
         WorkerDomainObject(WorkerDomainObject<'gc>),
         MessageChannelObject(MessageChannelObject<'gc>),
         SecurityDomainObject(SecurityDomainObject<'gc>),
+        Matrix3DObject(Matrix3DObject<'gc>),
+        CollatorObject(CollatorObject<'gc>),
     }
 )]
 pub trait TObject<'gc>: 'gc + Collect<'gc> + Debug + Into<Object<'gc>> + Clone + Copy {
@@ -293,7 +304,7 @@ pub trait TObject<'gc>: 'gc + Collect<'gc> + Debug + Into<Object<'gc>> + Clone +
 
     /// Purely an optimization for "array-like" access. This should return
     /// `None` when the lookup needs to be forwarded to the base or throw.
-    fn get_index_property(self, _index: usize) -> Option<Value<'gc>> {
+    fn get_index_property(self, _index: ArrayIndex) -> Option<Value<'gc>> {
         None
     }
 
@@ -346,7 +357,7 @@ pub trait TObject<'gc>: 'gc + Collect<'gc> + Debug + Into<Object<'gc>> + Clone +
     fn set_index_property(
         self,
         _activation: &mut Activation<'_, 'gc>,
-        _index: usize,
+        _index: ArrayIndex,
         _value: Value<'gc>,
     ) -> Option<Result<(), Error<'gc>>> {
         None
@@ -647,7 +658,9 @@ pub trait TObject<'gc>: 'gc + Collect<'gc> + Debug + Into<Object<'gc>> + Clone +
     /// Returns all public properties from this object's vtable, together with their values.
     /// This includes normal fields, const fields, and getter methods
     /// This is used for JSON serialization.
-    // FIXME - the order doesn't currently match Flash Player
+    ///
+    /// NOTE: Despite the order being random across executions in Flash Player,
+    /// getters *always* come after all slots/const slots.
     #[no_dynamic]
     fn public_vtable_properties(
         &self,
@@ -656,15 +669,20 @@ pub trait TObject<'gc>: 'gc + Collect<'gc> + Debug + Into<Object<'gc>> + Clone +
         let vtable = self.vtable();
 
         let mut values = Vec::new();
+
+        // First slots...
         for (name, prop) in vtable.public_properties() {
-            match prop {
-                Property::Slot { slot_id } | Property::ConstSlot { slot_id } => {
-                    values.push((name, self.base().get_slot(slot_id)));
-                }
-                Property::Virtual { get: Some(get), .. } => {
-                    values.push((name, Value::from(*self).call_method(get, &[], activation)?))
-                }
-                _ => {}
+            if let Property::Slot { slot_id } | Property::ConstSlot { slot_id } = prop {
+                let value = self.base().get_slot(slot_id);
+                values.push((name, value));
+            }
+        }
+
+        // ...then getters.
+        for (name, prop) in vtable.public_properties() {
+            if let Property::Virtual { get: Some(get), .. } = prop {
+                let value = Value::from(*self).call_method(get, &[], activation)?;
+                values.push((name, value));
             }
         }
 
@@ -803,6 +821,8 @@ impl<'gc> Object<'gc> {
         pub fn as_shared_object for SharedObjectObject;
         pub fn as_sound_transform for SoundTransformObject;
         pub fn as_style_sheet for StyleSheetObject;
+        pub fn as_matrix3d_object for Matrix3DObject;
+        pub fn as_collator for CollatorObject;
     }
 
     /// Unwrap this object's `Namespace`, if the object is a boxed namespace.
@@ -1011,6 +1031,8 @@ define_weak_enum! {
         WorkerDomainObject(WorkerDomainObjectWeak<'gc>),
         MessageChannelObject(MessageChannelObjectWeak<'gc>),
         SecurityDomainObject(SecurityDomainObjectWeak<'gc>),
+        Matrix3DObject(Matrix3DObjectWeak<'gc>),
+        CollatorObject(CollatorObjectWeak<'gc>),
     }
 }
 
@@ -1029,11 +1051,11 @@ pub fn abstract_class_allocator<'gc>(
 pub fn construct_call_handler<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     this.as_object()
         .unwrap()
         .as_class_object()
         .unwrap()
-        .construct(activation, args)
+        .construct_with_args(activation, args)
 }

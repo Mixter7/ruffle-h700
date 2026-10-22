@@ -2,6 +2,7 @@
 
 use crate::avm2::activation::Activation;
 use crate::avm2::error::{Error2006Type, make_error_2006, make_error_2008};
+use crate::avm2::function::FunctionArgs;
 use crate::avm2::globals::flash::display::display_object::initialize_for_allocator;
 use crate::avm2::object::{ClassObject, Object, TextFormatObject};
 use crate::avm2::parameters::ParametersExt;
@@ -28,7 +29,7 @@ pub fn text_field_allocator<'gc>(
 pub fn get_always_show_selection<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -45,7 +46,7 @@ pub fn get_always_show_selection<'gc>(
 pub fn set_always_show_selection<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -65,7 +66,7 @@ pub fn set_always_show_selection<'gc>(
 pub fn get_auto_size<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -89,7 +90,7 @@ pub fn get_auto_size<'gc>(
 pub fn set_auto_size<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -120,7 +121,7 @@ pub fn set_auto_size<'gc>(
 pub fn get_background<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -137,7 +138,7 @@ pub fn get_background<'gc>(
 pub fn set_background<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -155,7 +156,7 @@ pub fn set_background<'gc>(
 pub fn get_background_color<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -172,7 +173,7 @@ pub fn get_background_color<'gc>(
 pub fn set_background_color<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -191,7 +192,7 @@ pub fn set_background_color<'gc>(
 pub fn get_border<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -208,7 +209,7 @@ pub fn get_border<'gc>(
 pub fn set_border<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -226,7 +227,7 @@ pub fn set_border<'gc>(
 pub fn get_border_color<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -243,7 +244,7 @@ pub fn get_border_color<'gc>(
 pub fn set_border_color<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -262,7 +263,7 @@ pub fn set_border_color<'gc>(
 pub fn get_condense_white<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -279,7 +280,7 @@ pub fn get_condense_white<'gc>(
 pub fn set_condense_white<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -297,7 +298,7 @@ pub fn set_condense_white<'gc>(
 pub fn get_default_text_format<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -312,9 +313,9 @@ pub fn get_default_text_format<'gc>(
 }
 
 pub fn set_default_text_format<'gc>(
-    _activation: &mut Activation<'_, 'gc>,
+    activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -322,13 +323,9 @@ pub fn set_default_text_format<'gc>(
         .as_display_object()
         .and_then(|this| this.as_edit_text())
     {
-        let new_text_format = args.try_get_object(0);
-
-        if let Some(new_text_format) = new_text_format
-            && let Some(new_text_format) = new_text_format.as_text_format()
-        {
-            this.set_new_text_format(new_text_format.clone());
-        }
+        let new_text_format = args.get_object(activation, 0, "format")?;
+        let new_text_format = new_text_format.as_text_format().unwrap();
+        this.set_new_text_format(new_text_format.clone());
     }
 
     Ok(Value::Undefined)
@@ -337,7 +334,7 @@ pub fn set_default_text_format<'gc>(
 pub fn get_display_as_password<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -354,7 +351,7 @@ pub fn get_display_as_password<'gc>(
 pub fn set_display_as_password<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -373,7 +370,7 @@ pub fn set_display_as_password<'gc>(
 pub fn get_embed_fonts<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -390,7 +387,7 @@ pub fn get_embed_fonts<'gc>(
 pub fn set_embed_fonts<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -409,7 +406,7 @@ pub fn set_embed_fonts<'gc>(
 pub fn get_html_text<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -426,7 +423,7 @@ pub fn get_html_text<'gc>(
 pub fn set_html_text<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -446,7 +443,7 @@ pub fn set_html_text<'gc>(
 pub fn get_length<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -463,7 +460,7 @@ pub fn get_length<'gc>(
 pub fn get_multiline<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -480,7 +477,7 @@ pub fn get_multiline<'gc>(
 pub fn set_multiline<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -499,7 +496,7 @@ pub fn set_multiline<'gc>(
 pub fn get_selectable<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -516,7 +513,7 @@ pub fn get_selectable<'gc>(
 pub fn set_selectable<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -535,7 +532,7 @@ pub fn set_selectable<'gc>(
 pub fn get_text<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -552,7 +549,7 @@ pub fn get_text<'gc>(
 pub fn set_text<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -571,7 +568,7 @@ pub fn set_text<'gc>(
 pub fn get_text_color<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -592,7 +589,7 @@ pub fn get_text_color<'gc>(
 pub fn set_text_color<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -621,7 +618,7 @@ pub fn set_text_color<'gc>(
 pub fn get_text_height<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -639,7 +636,7 @@ pub fn get_text_height<'gc>(
 pub fn get_text_width<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -657,7 +654,7 @@ pub fn get_text_width<'gc>(
 pub fn get_type<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -679,7 +676,7 @@ pub fn get_type<'gc>(
 pub fn set_type<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -704,7 +701,7 @@ pub fn set_type<'gc>(
 pub fn get_word_wrap<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -721,7 +718,7 @@ pub fn get_word_wrap<'gc>(
 pub fn set_word_wrap<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -740,7 +737,7 @@ pub fn set_word_wrap<'gc>(
 pub fn append_text<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -765,7 +762,7 @@ pub fn append_text<'gc>(
 pub fn get_text_format<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -775,20 +772,37 @@ pub fn get_text_format<'gc>(
     {
         let mut begin_index = args.get_i32(0);
         let mut end_index = args.get_i32(1);
+        let text_length = this.text_length() as i32;
 
-        if end_index >= 0 && (begin_index >= end_index || begin_index < 0) {
-            return Err(make_error_2006(activation, Error2006Type::RangeError));
-        }
-
-        if begin_index < 0 {
+        if begin_index == -1 && end_index == -1 {
+            // Get the format of the whole text, even when it's empty.
             begin_index = 0;
+            end_index = text_length;
+        } else {
+            if begin_index == -1 {
+                begin_index = 0;
+            }
+
+            if begin_index < 0 || begin_index >= text_length {
+                return Err(make_error_2006(activation, Error2006Type::RangeError));
+            }
+
+            if end_index == -1 {
+                end_index = begin_index + 1;
+            }
+
+            if end_index <= 0 || end_index > text_length {
+                return Err(make_error_2006(activation, Error2006Type::RangeError));
+            }
         }
 
-        if end_index < 0 {
-            end_index = this.text_length() as i32;
-        }
-
-        let tf = this.text_format(begin_index as usize, end_index as usize);
+        // Empty ranges have no format.
+        // TODO: Move this check to `EditText::text_format`.
+        let tf = if begin_index < end_index {
+            this.text_format(begin_index as usize, end_index as usize)
+        } else {
+            TextFormat::default()
+        };
         return Ok(TextFormatObject::from_text_format(activation, tf)?.into());
     }
 
@@ -798,7 +812,7 @@ pub fn get_text_format<'gc>(
 pub fn replace_selected_text<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -825,7 +839,7 @@ pub fn replace_selected_text<'gc>(
 pub fn replace_text<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -852,7 +866,7 @@ pub fn replace_text<'gc>(
 pub fn get_caret_index<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -873,7 +887,7 @@ pub fn get_caret_index<'gc>(
 pub fn get_selection_begin_index<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -894,7 +908,7 @@ pub fn get_selection_begin_index<'gc>(
 pub fn get_selection_end_index<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -915,7 +929,7 @@ pub fn get_selection_end_index<'gc>(
 pub fn set_selection<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -939,33 +953,41 @@ pub fn set_selection<'gc>(
 pub fn set_text_format<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
     if let Some(this) = this
         .as_display_object()
         .and_then(|this| this.as_edit_text())
-        && let Some(tf) = args.try_get_object(0)
-        && let Some(tf) = tf.as_text_format()
     {
+        let tf = args.get_object(activation, 0, "format")?;
+        let tf = tf.as_text_format().unwrap();
+
         let mut begin_index = args.get_i32(1);
         let mut end_index = args.get_i32(2);
+        let text_length = this.text_length() as i32;
 
-        if begin_index < 0 {
+        if begin_index == -1 && end_index == -1 {
+            // Format the whole text, even when it's empty.
             begin_index = 0;
-        }
+            end_index = text_length;
+        } else {
+            if begin_index == -1 {
+                begin_index = 0;
+            }
 
-        if begin_index as usize > this.text_length() {
-            return Err(make_error_2006(activation, Error2006Type::RangeError));
-        }
+            if begin_index < 0 || begin_index >= text_length {
+                return Err(make_error_2006(activation, Error2006Type::RangeError));
+            }
 
-        if end_index < 0 {
-            end_index = this.text_length() as i32;
-        }
+            if end_index == -1 {
+                end_index = begin_index + 1;
+            }
 
-        if end_index as usize > this.text_length() {
-            return Err(make_error_2006(activation, Error2006Type::RangeError));
+            if end_index <= 0 || end_index > text_length {
+                return Err(make_error_2006(activation, Error2006Type::RangeError));
+            }
         }
 
         this.set_text_format(
@@ -982,7 +1004,7 @@ pub fn set_text_format<'gc>(
 pub fn get_anti_alias_type<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -1005,7 +1027,7 @@ pub fn get_anti_alias_type<'gc>(
 pub fn set_anti_alias_type<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -1028,7 +1050,7 @@ pub fn set_anti_alias_type<'gc>(
 pub fn get_grid_fit_type<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -1051,7 +1073,7 @@ pub fn get_grid_fit_type<'gc>(
 pub fn set_grid_fit_type<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -1077,7 +1099,7 @@ pub fn set_grid_fit_type<'gc>(
 pub fn get_thickness<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -1094,7 +1116,7 @@ pub fn get_thickness<'gc>(
 pub fn set_thickness<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -1117,7 +1139,7 @@ pub fn set_thickness<'gc>(
 pub fn get_sharpness<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -1134,7 +1156,7 @@ pub fn get_sharpness<'gc>(
 pub fn set_sharpness<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -1157,7 +1179,7 @@ pub fn set_sharpness<'gc>(
 pub fn get_num_lines<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -1174,7 +1196,7 @@ pub fn get_num_lines<'gc>(
 pub fn get_line_metrics<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -1213,7 +1235,7 @@ pub fn get_line_metrics<'gc>(
 pub fn get_line_length<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -1239,7 +1261,7 @@ pub fn get_line_length<'gc>(
 pub fn get_line_text<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -1261,7 +1283,7 @@ pub fn get_line_text<'gc>(
 pub fn get_line_offset<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -1287,7 +1309,7 @@ pub fn get_line_offset<'gc>(
 pub fn get_bottom_scroll_v<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -1304,7 +1326,7 @@ pub fn get_bottom_scroll_v<'gc>(
 pub fn get_max_scroll_v<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -1321,7 +1343,7 @@ pub fn get_max_scroll_v<'gc>(
 pub fn get_max_scroll_h<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -1338,7 +1360,7 @@ pub fn get_max_scroll_h<'gc>(
 pub fn get_scroll_v<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -1353,9 +1375,9 @@ pub fn get_scroll_v<'gc>(
 }
 
 pub fn set_scroll_v<'gc>(
-    _activation: &mut Activation<'_, 'gc>,
+    activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -1364,7 +1386,7 @@ pub fn set_scroll_v<'gc>(
         .and_then(|this| this.as_edit_text())
     {
         let input = args.get_i32(0);
-        this.set_scroll(input as f64);
+        this.set_scroll(input as f64, true, activation.context);
     }
 
     Ok(Value::Undefined)
@@ -1373,7 +1395,7 @@ pub fn set_scroll_v<'gc>(
 pub fn get_scroll_h<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -1390,7 +1412,7 @@ pub fn get_scroll_h<'gc>(
 pub fn set_scroll_h<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -1412,7 +1434,7 @@ pub fn set_scroll_h<'gc>(
 pub fn get_max_chars<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -1429,7 +1451,7 @@ pub fn get_max_chars<'gc>(
 pub fn set_max_chars<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -1447,7 +1469,7 @@ pub fn set_max_chars<'gc>(
 pub fn get_mouse_wheel_enabled<'gc>(
     activation: &mut Activation<'_, 'gc>,
     _this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     avm2_stub_getter!(activation, "flash.text.TextField", "mouseWheelEnabled");
     Ok(true.into())
@@ -1456,7 +1478,7 @@ pub fn get_mouse_wheel_enabled<'gc>(
 pub fn set_mouse_wheel_enabled<'gc>(
     activation: &mut Activation<'_, 'gc>,
     _this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     avm2_stub_setter!(activation, "flash.text.TextField", "mouseWheelEnabled");
     Ok(Value::Undefined)
@@ -1465,7 +1487,7 @@ pub fn set_mouse_wheel_enabled<'gc>(
 pub fn get_restrict<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -1485,7 +1507,7 @@ pub fn get_restrict<'gc>(
 pub fn set_restrict<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -1501,7 +1523,7 @@ pub fn set_restrict<'gc>(
 pub fn get_selected_text<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -1526,7 +1548,7 @@ pub fn get_selected_text<'gc>(
 pub fn get_text_runs<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -1565,7 +1587,7 @@ pub fn get_text_runs<'gc>(
 pub fn get_line_index_of_char<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -1592,7 +1614,7 @@ pub fn get_line_index_of_char<'gc>(
 pub fn get_char_index_at_point<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -1617,7 +1639,7 @@ pub fn get_char_index_at_point<'gc>(
 pub fn get_line_index_at_point<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -1642,7 +1664,7 @@ pub fn get_line_index_at_point<'gc>(
 pub fn get_first_char_in_paragraph<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -1668,7 +1690,7 @@ pub fn get_first_char_in_paragraph<'gc>(
 pub fn get_paragraph_length<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -1694,7 +1716,7 @@ pub fn get_paragraph_length<'gc>(
 pub fn get_char_boundaries<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -1734,7 +1756,7 @@ pub fn get_char_boundaries<'gc>(
 pub fn get_style_sheet<'gc>(
     _activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    _args: &[Value<'gc>],
+    _args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 
@@ -1754,7 +1776,7 @@ pub fn get_style_sheet<'gc>(
 pub fn set_style_sheet<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Value<'gc>,
-    args: &[Value<'gc>],
+    args: FunctionArgs<'_, 'gc>,
 ) -> Result<Value<'gc>, Error<'gc>> {
     let this = this.as_object().unwrap();
 

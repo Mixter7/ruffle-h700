@@ -4,7 +4,8 @@ use crate::avm2::activation::Activation;
 use crate::avm2::class::Class;
 use crate::avm2::dynamic_map::{DynamicKey, DynamicMap};
 use crate::avm2::error;
-use crate::avm2::object::{ArrayObject, ClassObject, FunctionObject, Object, TObject};
+use crate::avm2::index::{ArrayIndex, parse_u32_index};
+use crate::avm2::object::{ClassObject, FunctionObject, Object, TObject};
 use crate::avm2::value::Value;
 use crate::avm2::vtable::VTable;
 use crate::avm2::{Error, Multiname, QName};
@@ -85,9 +86,11 @@ impl<'gc> TObject<'gc> for ScriptObject<'gc> {
 }
 
 pub fn maybe_int_property(name: AvmString<'_>) -> DynamicKey<'_> {
-    // TODO: this should use a custom implementation, not parse()
-    // FP is much stricter here, only allowing pure natural numbers without sign or leading zeros
-    if let Ok(val) = name.parse::<u32>() {
+    // Due to a quirk in avmplus, only values that fit in 28 bits are considered
+    // to be integers. Other values remain strings.
+    const MAX_U28: u32 = 2u32.pow(28) - 1;
+
+    if let Some(val) = parse_u32_index(&name, MAX_U28) {
         DynamicKey::Uint(val)
     } else {
         DynamicKey::String(name)
@@ -476,7 +479,7 @@ pub fn get_dynamic_property<'gc>(
         //
         // This special-case doesn't apply to anything else (e.g. Vector elements).
         if let Some(array) = this_proto.as_array_object()
-            && let Some(index) = ArrayObject::as_array_index(&local_name)
+            && let Some(index) = ArrayIndex::from_wstr(&local_name)
             && let Some(value) = array.get_index_property(index)
         {
             return Ok(Some(value));

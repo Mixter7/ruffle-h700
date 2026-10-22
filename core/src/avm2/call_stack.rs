@@ -3,6 +3,11 @@ use crate::avm2::method::Method;
 use crate::string::WString;
 use gc_arena::Collect;
 
+/// The maximum number of frames kept in a captured stack trace.
+///
+/// Flash Player keeps only the innermost frames.
+const MAX_CAPTURED_FRAMES: usize = 64;
+
 #[derive(Collect, Clone)]
 #[collect(no_drop)]
 pub struct CallStack<'gc> {
@@ -22,6 +27,14 @@ impl<'gc> CallStack<'gc> {
         self.stack.pop();
     }
 
+    /// Returns a copy of this call stack, limited to its innermost frames.
+    pub fn capture(&self) -> Self {
+        let start = self.stack.len().saturating_sub(MAX_CAPTURED_FRAMES);
+        Self {
+            stack: self.stack[start..].to_vec(),
+        }
+    }
+
     pub fn display(&self, output: &mut WString) {
         for method in self.stack.iter().rev() {
             output.push_utf8("\n\tat ");
@@ -36,17 +49,7 @@ impl<'gc> CallStack<'gc> {
 
             // Special-case the printed message for script initializers
             if is_global_init {
-                let tunit = method.translation_unit();
-                let name = if let Some(name) = tunit.name() {
-                    name.to_utf8_lossy().to_string()
-                } else {
-                    "<No name>".to_string()
-                };
-
-                // NOTE: We intentionally diverge from Flash Player's output
-                // here - everything with the [] brackets is extra information
-                // added by Ruffle
-                output.push_utf8(&format!("global$init() [TU={name}]"));
+                output.push_utf8("global$init()");
             } else {
                 display_function(output, *method);
             }

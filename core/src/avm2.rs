@@ -1,12 +1,11 @@
 //! ActionScript Virtual Machine 2 (AS3) support
 
-use crate::PlayerRuntime;
 use crate::avm2::bytearray::ObjectEncoding;
 use crate::avm2::class::{AllocatorFn, CustomConstructorFn};
 use crate::avm2::e4x::XmlSettings;
 use crate::avm2::error::{
-    Error1014Type, make_error_1014, make_error_1047, make_error_1107, make_error_2022,
-    make_error_2023,
+    Error1014Type, make_error_1014, make_error_1027, make_error_1047, make_error_1107,
+    make_error_2022, make_error_2023,
 };
 use crate::avm2::function::exec;
 use crate::avm2::globals::{
@@ -23,14 +22,15 @@ use crate::context::UpdateContext;
 use crate::display_object::{DisplayObject, MovieClip, TDisplayObject};
 use crate::string::{AvmString, StringContext};
 use crate::tag_utils::SwfMovie;
+use crate::{PlayerMode, PlayerRuntime};
 
 use fnv::FnvHashMap;
 use gc_arena::lock::GcRefLock;
 use gc_arena::{Collect, Gc, Mutation};
 use ruffle_wstr::WStr;
-use std::sync::Arc;
 use swf::DoAbc2Flag;
 use swf::avm2::read::Reader;
+use swf::error::AbcParseError;
 
 #[macro_export]
 macro_rules! avm_debug {
@@ -58,6 +58,7 @@ mod filters;
 mod flv;
 mod function;
 pub mod globals;
+mod index;
 mod metadata;
 mod method;
 mod multiname;
@@ -506,11 +507,18 @@ impl<'gc> Avm2<'gc> {
         name: Option<AvmString<'gc>>,
         flags: DoAbc2Flag,
         domain: Domain<'gc>,
-        movie: Arc<SwfMovie>,
+        movie: SwfMovie<'gc>,
     ) -> Result<Option<Script<'gc>>, Error<'gc>> {
         let mut reader = Reader::new(data);
         let abc = match reader.read() {
             Ok(abc) => abc,
+            Err(AbcParseError::MethodInfoOutOfBounds {
+                method_count,
+                method_index,
+            }) => {
+                let mut activation = Activation::from_nothing(context);
+                return Err(make_error_1027(&mut activation, method_index, method_count));
+            }
             Err(_) => {
                 let mut activation = Activation::from_nothing(context);
                 return Err(make_error_1107(&mut activation));
@@ -544,7 +552,7 @@ impl<'gc> Avm2<'gc> {
         context: &mut UpdateContext<'gc>,
         data: &[u8],
         domain: Domain<'gc>,
-        movie: Arc<SwfMovie>,
+        movie: SwfMovie<'gc>,
     ) {
         let mut reader = Reader::new(data);
         let abc = match reader.read() {
@@ -627,7 +635,7 @@ impl<'gc> Avm2<'gc> {
     }
 
     pub fn capture_call_stack(&self) -> CallStack<'gc> {
-        self.call_stack.borrow().clone()
+        self.call_stack.borrow().capture()
     }
 
     fn push_scope(&mut self, scope: Scope<'gc>) {
@@ -682,6 +690,14 @@ impl<'gc> Avm2<'gc> {
         error: Error<'gc>,
         extra_info: &str,
     ) {
+        // Flash Player traces uncaught errors, but when trace is disabled
+        // (e.g. release mode), FP doesn't stringify the error for the second
+        // time, which is observable.
+        if activation.context.player_mode == PlayerMode::Debug {
+            let stringified = error.to_string(activation);
+            activation.context.avm_trace(&stringified);
+        }
+
         // This will print the properly formatted error
         let stringified = error.to_string(activation);
         tracing::error!("{}: {}", extra_info, stringified);

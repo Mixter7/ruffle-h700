@@ -22,7 +22,6 @@ use gc_arena::{Collect, Gc, Mutation};
 use std::cell::Cell;
 use std::fmt::Debug;
 use std::rc::Rc;
-use std::sync::Arc;
 use swf::avm2::types::{
     AbcFile, Index, Method as AbcMethod, Multiname as AbcMultiname, Namespace as AbcNamespace,
     Script as AbcScript,
@@ -79,7 +78,7 @@ struct TranslationUnitData<'gc> {
     multinames: Box<[OnceLock<Gc<'gc, Multiname<'gc>>>]>,
 
     /// The movie that this TranslationUnit was loaded from.
-    movie: Arc<SwfMovie>,
+    movie: SwfMovie<'gc>,
 }
 
 impl<'gc> TranslationUnit<'gc> {
@@ -89,7 +88,7 @@ impl<'gc> TranslationUnit<'gc> {
         abc: AbcFile,
         domain: Domain<'gc>,
         name: Option<AvmString<'gc>>,
-        movie: Arc<SwfMovie>,
+        movie: SwfMovie<'gc>,
         mc: &Mutation<'gc>,
     ) -> Self {
         use std::iter::repeat_n;
@@ -154,8 +153,8 @@ impl<'gc> TranslationUnit<'gc> {
         Rc::ptr_eq(&self.0.abc, &other.0.abc)
     }
 
-    pub fn movie(self) -> Arc<SwfMovie> {
-        self.0.movie.clone()
+    pub fn movie(self) -> SwfMovie<'gc> {
+        self.0.movie
     }
 
     pub fn api_version(self, avm2: &Avm2<'gc>) -> ApiVersion {
@@ -627,14 +626,14 @@ impl<'gc> Script<'gc> {
         let global_obj_vtable = global_obj_vtable.expect("Global object vtable should be valid");
 
         // Script initializers are always run in "interpreter mode"
-        let script_init_assoc = MethodAssociation::classbound(global_class, true);
+        let script_init_assoc =
+            MethodAssociation::classbound(global_class, Some(object_class), true);
         init_method.associate(activation, script_init_assoc)?;
 
         // Associate all the methods on the script
-        global_class.bind_methods(
-            activation,
-            MethodAssociation::classbound(global_class, false),
-        )?;
+        let script_method_assoc =
+            MethodAssociation::classbound(global_class, Some(object_class), false);
+        global_class.bind_methods(activation, script_method_assoc)?;
 
         Ok(ScriptObject::custom_object(
             mc,

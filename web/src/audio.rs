@@ -145,10 +145,14 @@ impl Buffer {
         }));
 
         // Swap in the onended handler.
-        let buffer_handle = buffer.clone();
+        // The backend owns the buffers. A strong reference here would keep this
+        // buffer and its callback alive after the backend is dropped.
+        let buffer_handle = Rc::downgrade(&buffer);
         buffer.borrow_mut().on_ended_handler = Closure::new(move || {
             // Refill and schedule the buffer for playback.
-            let _ = buffer_handle.borrow_mut().play();
+            if let Some(buffer) = buffer_handle.upgrade() {
+                let _ = buffer.borrow_mut().play();
+            }
         });
 
         Ok(buffer)
@@ -267,7 +271,7 @@ impl Drop for Buffer {
     }
 }
 
-#[wasm_bindgen(raw_module = "./ruffle-imports")]
+#[wasm_bindgen(raw_module = "./ruffle-imports.js")]
 unsafe extern "C" {
     // Imported JS method to copy interleaved audio data into an `AudioBuffer`.
     #[wasm_bindgen(js_name = "copyToAudioBufferInterleaved")]
