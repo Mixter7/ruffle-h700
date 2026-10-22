@@ -222,11 +222,22 @@ jobs:
               pub static REND_N: AtomicU64 = AtomicU64::new(0);
               pub static GUI_US: AtomicU64 = AtomicU64::new(0);
               pub static GUI_N: AtomicU64 = AtomicU64::new(0);
+              pub static TICK_MAX: AtomicU64 = AtomicU64::new(0);
+              pub static REND_MAX: AtomicU64 = AtomicU64::new(0);
+              pub static GUI_MAX: AtomicU64 = AtomicU64::new(0);
+              pub static TICK_SLOW: AtomicU64 = AtomicU64::new(0);
+              pub static REND_SLOW: AtomicU64 = AtomicU64::new(0);
+              pub static GUI_SLOW: AtomicU64 = AtomicU64::new(0);
               static LAST: Mutex<Option<Instant>> = Mutex::new(None);
 
-              pub fn add(us: &AtomicU64, n: &AtomicU64, start: Instant) {
-                  us.fetch_add(start.elapsed().as_micros() as u64, Ordering::Relaxed);
+              pub fn add(us: &AtomicU64, n: &AtomicU64, mx: &AtomicU64, slow: &AtomicU64, start: Instant) {
+                  let e = start.elapsed().as_micros() as u64;
+                  us.fetch_add(e, Ordering::Relaxed);
                   n.fetch_add(1, Ordering::Relaxed);
+                  mx.fetch_max(e, Ordering::Relaxed);
+                  if e > 60_000 {
+                      slow.fetch_add(1, Ordering::Relaxed);
+                  }
               }
 
               fn take(us: &AtomicU64, n: &AtomicU64) -> (u64, u64) {
@@ -245,9 +256,15 @@ jobs:
                   let (ru, rn) = take(&REND_US, &REND_N);
                   let (gu, gn) = take(&GUI_US, &GUI_N);
                   let avg = |u: u64, n: u64| if n == 0 { 0.0 } else { u as f64 / n as f64 / 1000.0 };
+                  let mxv = |a: &AtomicU64| a.swap(0, Ordering::Relaxed) as f64 / 1000.0;
+                  let slw = |a: &AtomicU64| a.swap(0, Ordering::Relaxed);
                   eprintln!(
                       "H700 PERF (2s): tick {} calls avg {:.1} ms | player.render {} calls avg {:.1} ms | gui.render+present {} calls avg {:.1} ms",
                       tn, avg(tu, tn), rn, avg(ru, rn), gn, avg(gu, gn)
+                  );
+                  eprintln!(
+                      "H700 SPIKE (2s): max tick {:.0} ms, render {:.0} ms, present {:.0} ms | frames >60ms: tick {}, render {}, present {}",
+                      mxv(&TICK_MAX), mxv(&REND_MAX), mxv(&GUI_MAX), slw(&TICK_SLOW), slw(&REND_SLOW), slw(&GUI_SLOW)
                   );
               }
           }
@@ -258,11 +275,11 @@ jobs:
 
           pairs = [
            ("player.render();",
-            "{ let __t = std::time::Instant::now(); player.render(); h700_perf::add(&h700_perf::REND_US, &h700_perf::REND_N, __t); }"),
+            "{ let __t = std::time::Instant::now(); player.render(); h700_perf::add(&h700_perf::REND_US, &h700_perf::REND_N, &h700_perf::REND_MAX, &h700_perf::REND_SLOW, __t); }"),
            ("self.gui.render(player);",
-            "{ let __t = std::time::Instant::now(); self.gui.render(player); h700_perf::add(&h700_perf::GUI_US, &h700_perf::GUI_N, __t); h700_perf::report(); }"),
+            "{ let __t = std::time::Instant::now(); self.gui.render(player); h700_perf::add(&h700_perf::GUI_US, &h700_perf::GUI_N, &h700_perf::GUI_MAX, &h700_perf::GUI_SLOW, __t); h700_perf::report(); }"),
            ("player.tick(dt);",
-            "{ let __t = std::time::Instant::now(); player.tick(dt); h700_perf::add(&h700_perf::TICK_US, &h700_perf::TICK_N, __t); }"),
+            "{ let __t = std::time::Instant::now(); player.tick(dt); h700_perf::add(&h700_perf::TICK_US, &h700_perf::TICK_N, &h700_perf::TICK_MAX, &h700_perf::TICK_SLOW, __t); }"),
           ]
           for old, new in pairs:
               assert s.count(old) == 1, old
@@ -286,11 +303,11 @@ jobs:
               s = s.replace(old, new, 1)
 
           rep("let rval = func(context);\n\n            Self::run_actions(context);",
-              "let __t0 = web_time::Instant::now();\n            let rval = func(context);\n            h700_perf2::add(&h700_perf2::FUNC_US, __t0);\n            let __t1 = web_time::Instant::now();\n            Self::run_actions(context);\n            h700_perf2::add(&h700_perf2::ACT_US, __t1);")
+              "let __t0 = web_time::Instant::now();\n            let rval = func(context);\n            h700_perf2::add(&h700_perf2::FUNC_US, __t0);\n            let __t1 = web_time::Instant::now();\n            Self::run_actions(context);\n            h700_perf2::add_max(&h700_perf2::ACT_US, &h700_perf2::ACT_MAX, __t1);")
           rep("self.update_mouse_state(EnumSet::empty(), false, &mut false);",
               "let __t2 = web_time::Instant::now();\n        self.update_mouse_state(EnumSet::empty(), false, &mut false);\n        h700_perf2::add(&h700_perf2::MOUSE_US, __t2);")
           rep("self.gc_arena.borrow_mut().collect_debt();",
-              "let __t3 = web_time::Instant::now();\n        self.gc_arena.borrow_mut().collect_debt();\n        h700_perf2::add(&h700_perf2::GC_US, __t3);\n        h700_perf2::UPDATE_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);\n        h700_perf2::report();")
+              "let __t3 = web_time::Instant::now();\n        self.gc_arena.borrow_mut().collect_debt();\n        h700_perf2::add_max(&h700_perf2::GC_US, &h700_perf2::GC_MAX, __t3);\n        h700_perf2::UPDATE_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);\n        h700_perf2::report();")
           rep("Avm1::run_frame(context);",
               "let __t4 = web_time::Instant::now();\n            Avm1::run_frame(context);\n            h700_perf2::add(&h700_perf2::AVM1_US, __t4);")
 
@@ -313,6 +330,8 @@ jobs:
               pub static GC_US: AtomicU64 = AtomicU64::new(0);
               pub static AVM1_US: AtomicU64 = AtomicU64::new(0);
               pub static UPDATE_N: AtomicU64 = AtomicU64::new(0);
+              pub static GC_MAX: AtomicU64 = AtomicU64::new(0);
+              pub static ACT_MAX: AtomicU64 = AtomicU64::new(0);
               static LAST: Mutex<Option<Instant>> = Mutex::new(None);
               static LABELS: Mutex<Option<HashMap<String, (u64, u64)>>> = Mutex::new(None);
 
@@ -328,6 +347,12 @@ jobs:
                   us.fetch_add(start.elapsed().as_micros() as u64, Ordering::Relaxed);
               }
 
+              pub fn add_max(us: &AtomicU64, mx: &AtomicU64, start: Instant) {
+                  let e = start.elapsed().as_micros() as u64;
+                  us.fetch_add(e, Ordering::Relaxed);
+                  mx.fetch_max(e, Ordering::Relaxed);
+              }
+
               pub fn report() {
                   let mut last = LAST.lock().unwrap();
                   let now = Instant::now();
@@ -341,6 +366,10 @@ jobs:
                   eprintln!(
                       "H700 CORE (2s totals ms): update calls {} | func {:.0} (of which Avm1::run_frame {:.0}) | run_actions {:.0} | update_mouse_state {:.0} | gc collect_debt {:.0}",
                       n, ms(&FUNC_US), ms(&AVM1_US), ms(&ACT_US), ms(&MOUSE_US), ms(&GC_US)
+                  );
+                  eprintln!(
+                      "H700 CORE max (single call, ms): run_actions {:.0} | gc collect_debt {:.0}",
+                      ms(&ACT_MAX), ms(&GC_MAX)
                   );
                   let mut g = LABELS.lock().unwrap();
                   if let Some(map) = g.take() {
