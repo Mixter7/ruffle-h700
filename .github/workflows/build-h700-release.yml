@@ -1,4 +1,4 @@
-name: Build Ruffle H700 Release
+name: Build H7Flash Ruffle (H700)
 
 on:
   workflow_dispatch:
