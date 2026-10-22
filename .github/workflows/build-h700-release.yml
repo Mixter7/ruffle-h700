@@ -10,6 +10,14 @@ on:
         options:
           - dist
           - release
+      frame_skip:
+        description: "Skip drawing some frames while the game is behind schedule (keeps game speed closer to normal)"
+        type: boolean
+        default: true
+      mimalloc:
+        description: "Use the mimalloc memory allocator (usually a bit faster than the system one)"
+        type: boolean
+        default: true
       perf_timing:
         description: "Print per-2s timing of tick / render / present into the game log (diagnostic)"
         type: boolean
@@ -82,6 +90,98 @@ jobs:
         run: |
           . "$HOME/.cargo/env"
           cargo fetch
+
+      - name: Apply frame skip (optional)
+        if: ${{ inputs.frame_skip }}
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("desktop/src/app.rs")
+          s = p.read_text(encoding="utf-8")
+
+          def rep(old, new):
+              global s
+              assert s.count(old) == 1, old
+              s = s.replace(old, new, 1)
+
+          mod = '''
+          mod h700_skip {
+              // Skip drawing some frames while the game logic is behind schedule, so slow-to-draw scenes
+              // do not slow the game down. Disable with HOBO_NO_SKIP=1.
+              use std::sync::OnceLock;
+              use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+              use std::time::Instant;
+
+              pub static BEHIND: AtomicBool = AtomicBool::new(false);
+              static LAST_END_US: AtomicU64 = AtomicU64::new(0);
+              static LAST_COST_US: AtomicU64 = AtomicU64::new(0);
+
+              fn epoch() -> Instant {
+                  static E: OnceLock<Instant> = OnceLock::new();
+                  *E.get_or_init(Instant::now)
+              }
+
+              fn now_us() -> u64 {
+                  epoch().elapsed().as_micros() as u64
+              }
+
+              fn disabled() -> bool {
+                  static D: OnceLock<bool> = OnceLock::new();
+                  *D.get_or_init(|| std::env::var("HOBO_NO_SKIP").map(|v| v == "1").unwrap_or(false))
+              }
+
+              pub fn render_done(start: Instant) {
+                  LAST_COST_US.store(start.elapsed().as_micros() as u64, Ordering::Relaxed);
+                  LAST_END_US.store(now_us(), Ordering::Relaxed);
+              }
+
+              pub fn should_render() -> bool {
+                  if disabled() || !BEHIND.load(Ordering::Relaxed) {
+                      return true;
+                  }
+                  let since = now_us().saturating_sub(LAST_END_US.load(Ordering::Relaxed));
+                  let cost = LAST_COST_US.load(Ordering::Relaxed);
+                  // behind schedule: draw at most ~30 times per second and spend at most ~25% of the time drawing
+                  let wait = (cost * 3).clamp(33_000, 150_000);
+                  since >= wait
+              }
+          }
+          '''
+          rep("impl MainWindow {", mod + "\nimpl MainWindow {")
+          rep("if !self.minimized {\n                let mut player = self.player.get();",
+              "if !self.minimized {\n                let __h700_t0 = std::time::Instant::now();\n                let mut player = self.player.get();")
+          rep("plot_stats_in_tracy(&self.gui.descriptors().wgpu_instance);",
+              "plot_stats_in_tracy(&self.gui.descriptors().wgpu_instance);\n                h700_skip::render_done(__h700_t0);")
+          rep("player.tick(dt);\n                    new_time + player.time_til_next_frame()",
+              "player.tick(dt);\n                    let __til = player.time_til_next_frame();\n                    h700_skip::BEHIND.store(__til.is_zero(), std::sync::atomic::Ordering::Relaxed);\n                    new_time + __til")
+          rep("if player.map(|p| p.needs_render()).unwrap_or_default() || self.gui.needs_render() {\n            self.gui.window().request_redraw();",
+              "if (player.map(|p| p.needs_render()).unwrap_or_default() || self.gui.needs_render())\n            && h700_skip::should_render()\n        {\n            self.gui.window().request_redraw();")
+          p.write_text(s, encoding="utf-8")
+          print("OK frame skip patch")
+          PY
+          grep -n "h700_skip" desktop/src/app.rs | head -5
+
+      - name: Apply mimalloc (optional)
+        if: ${{ inputs.mimalloc }}
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          c = Path("desktop/Cargo.toml")
+          t = c.read_text(encoding="utf-8")
+          anchor = "[dependencies]\n"
+          assert t.count(anchor) == 1
+          t = t.replace(anchor, anchor + 'mimalloc = { version = "0.1", default-features = false }\n', 1)
+          c.write_text(t, encoding="utf-8")
+
+          m = Path("desktop/src/main.rs")
+          s = m.read_text(encoding="utf-8")
+          anchor = "static RUFFLE_VERSION: &str = concat!("
+          assert s.count(anchor) == 1
+          s = s.replace(anchor, '#[cfg(not(feature = "tracy"))]\n#[global_allocator]\nstatic GLOBAL_MIMALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;\n\n' + anchor, 1)
+          m.write_text(s, encoding="utf-8")
+          print("OK mimalloc patch")
+          PY
+          grep -n "mimalloc" desktop/Cargo.toml desktop/src/main.rs
 
       - name: Add H700 timing logs (optional)
         if: ${{ inputs.perf_timing }}
