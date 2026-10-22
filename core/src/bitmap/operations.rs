@@ -1293,6 +1293,26 @@ pub fn apply_filter<'gc>(
     }
 }
 
+// Regions are clipped by the caller. Only used for distinct bitmaps and raw
+// copies: no blending, alpha conversion, or overlapping in-place writes.
+fn copy_pixel_rows<T: Copy>(
+    source: &[T],
+    dest: &mut [T],
+    source_stride: usize,
+    dest_stride: usize,
+    source_region: PixelRegion,
+    dest_region: PixelRegion,
+) {
+    let width = dest_region.width() as usize;
+    for y in 0..dest_region.height() as usize {
+        let src = (source_region.y_min as usize + y) * source_stride
+            + source_region.x_min as usize;
+        let dst = (dest_region.y_min as usize + y) * dest_stride
+            + dest_region.x_min as usize;
+        dest[dst..dst + width].copy_from_slice(&source[src..src + width]);
+    }
+}
+
 fn copy_on_cpu<'gc>(
     context: &Mutation<'gc>,
     renderer: &mut dyn RenderBackend,
@@ -1312,7 +1332,18 @@ fn copy_on_cpu<'gc>(
     }
 
     let dest_is_source = source.ptr_eq(dest);
-    let mut dest = dest.sync(renderer).borrow_mut(context);
+    // Old destination pixels are irrelevant only for a complete, non-blended
+    // replacement from a distinct bitmap. Preserve synchronization for aliases,
+    // blending, and partial writes (which must retain the untouched pixels).
+    let replaces_destination = !dest_is_source
+        && !blend
+        && dest_region == PixelRegion::for_whole_size(dest.width(), dest.height());
+    let dest_data = if replaces_destination {
+        dest.overwrite_cpu_pixels_from_gpu(context).0
+    } else {
+        dest.sync(renderer)
+    };
+    let mut dest = dest_data.borrow_mut(context);
 
     if dest_is_source {
         for y in 0..dest_region.height() {
@@ -1344,13 +1375,16 @@ fn copy_on_cpu<'gc>(
                 // Copying an entire texture that's the same size and type? Just replace the whole thing
                 dest.raw_pixels_mut().copy_from_slice(source.raw_pixels());
             } else {
-                for y in 0..dest_region.height() {
-                    for x in 0..dest_region.width() {
-                        let color = source
-                            .get_pixel32_raw(source_region.x_min + x, source_region.y_min + y);
-                        dest.set_pixel32_raw(dest_region.x_min + x, dest_region.y_min + y, color);
-                    }
-                }
+                let source_stride = source.width() as usize;
+                let dest_stride = dest.width() as usize;
+                copy_pixel_rows(
+                    source.raw_pixels(),
+                    dest.raw_pixels_mut(),
+                    source_stride,
+                    dest_stride,
+                    source_region,
+                    dest_region,
+                );
             }
         } else {
             // Copying (not blending) a transparent texture to an opaque texture,
@@ -1976,4 +2010,122 @@ pub fn pixel_dissolve<'gc>(
     write.set_cpu_dirty(mc, dest_region);
 
     raw_perm_index as i32
+}
+
+
+#[cfg(test)]
+mod h700_copy_tests {
+    use super::*;
+    use gc_arena::arena::rootless_mutate;
+    use ruffle_render::backend::{ViewportDimensions, null::NullRenderer};
+    use ruffle_render::bitmap::SyncHandle;
+
+    #[derive(Debug)]
+    struct PendingReadback;
+    impl SyncHandle for PendingReadback {}
+
+    fn renderer() -> NullRenderer {
+        NullRenderer::new(ViewportDimensions {
+            width: 8,
+            height: 8,
+            scale_factor: 1.0,
+        })
+    }
+
+    #[test]
+    fn full_copy_discards_unneeded_destination_readback() {
+        rootless_mutate(|mc| {
+            let mut renderer = renderer();
+            let source = BitmapData::new(mc, 4, 4, true, 0x80402010);
+            let dest = BitmapData::new(mc, 2, 2, true, 0);
+            let area = PixelRegion::for_whole_size(2, 2);
+            dest.sync(&mut renderer).borrow_mut(mc).set_gpu_dirty(
+                mc, Box::new(PendingReadback), area,
+            );
+            // NullRenderer rejects readbacks: this test fails if the discarded
+            // destination is synchronized. Source is larger and offset.
+            copy_on_cpu(mc, &mut renderer, source, dest,
+                PixelRegion::for_region(1, 1, 2, 2), area, false);
+            let expected = Color::bgra_u32(0x80402010).to_premultiplied_alpha(true);
+            assert_eq!(dest.sync(&mut renderer).borrow().raw_pixels(), &[expected; 4]);
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "Failed to sync BitmapData")]
+    fn partial_copy_preserves_destination_readback() {
+        rootless_mutate(|mc| {
+            let mut renderer = renderer();
+            let source = BitmapData::new(mc, 2, 2, true, 0xff123456);
+            let dest = BitmapData::new(mc, 4, 4, true, 0);
+            dest.sync(&mut renderer).borrow_mut(mc).set_gpu_dirty(
+                mc, Box::new(PendingReadback), PixelRegion::for_whole_size(4, 4),
+            );
+            copy_on_cpu(mc, &mut renderer, source, dest,
+                PixelRegion::for_whole_size(2, 2), PixelRegion::for_region(1, 1, 2, 2), false);
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "Failed to sync BitmapData")]
+    fn blending_preserves_destination_readback() {
+        rootless_mutate(|mc| {
+            let mut renderer = renderer();
+            let source = BitmapData::new(mc, 2, 2, true, 0x80123456);
+            let dest = BitmapData::new(mc, 2, 2, true, 0);
+            let area = PixelRegion::for_whole_size(2, 2);
+            dest.sync(&mut renderer).borrow_mut(mc).set_gpu_dirty(
+                mc, Box::new(PendingReadback), area,
+            );
+            copy_on_cpu(mc, &mut renderer, source, dest, area, area, true);
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "Failed to sync BitmapData")]
+    fn full_copy_still_reads_current_source_pixels() {
+        rootless_mutate(|mc| {
+            let mut renderer = renderer();
+            let source = BitmapData::new(mc, 2, 2, true, 0);
+            let dest = BitmapData::new(mc, 2, 2, true, 0);
+            let area = PixelRegion::for_whole_size(2, 2);
+            source.sync(&mut renderer).borrow_mut(mc).set_gpu_dirty(
+                mc, Box::new(PendingReadback), area,
+            );
+            copy_on_cpu(mc, &mut renderer, source, dest, area, area, false);
+        });
+    }
+
+    #[test]
+    fn row_copies_match_pixel_reference_with_offsets_and_different_strides() {
+        for sw in 1..=6u32 {
+            for dw in 1..=6u32 {
+                let source: Vec<u32> = (0..sw * 4).collect();
+                for sx in 0..sw {
+                    for dx in 0..dw {
+                        for width in 1..=(sw - sx).min(dw - dx) {
+                            for sy in 0..4u32 {
+                                for dy in 0..4u32 {
+                                    for height in 1..=(4 - sy).min(4 - dy) {
+                                        let mut actual = vec![u32::MAX; dw as usize * 4];
+                                        let mut expected = actual.clone();
+                                        for y in 0..height {
+                                            for x in 0..width {
+                                                expected[((dy + y) * dw + dx + x) as usize] =
+                                                    source[((sy + y) * sw + sx + x) as usize];
+                                            }
+                                        }
+                                        copy_pixel_rows(&source, &mut actual, sw as usize, dw as usize,
+                                            PixelRegion::for_region(sx, sy, width, height),
+                                            PixelRegion::for_region(dx, dy, width, height));
+                                        assert_eq!(actual, expected);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
