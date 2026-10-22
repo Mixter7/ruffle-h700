@@ -11,9 +11,9 @@ on:
           - dist
           - release
       gc_tune:
-        description: "Let the garbage collector run less often (fewer long pauses; uses a bit more memory)"
+        description: "Experimental GC pacing: more memory, pause duration must be measured"
         type: boolean
-        default: true
+        default: false
       frame_skip:
         description: "Skip drawing some frames while the game is behind schedule (keeps game speed closer to normal)"
         type: boolean
@@ -149,7 +149,7 @@ jobs:
               static OK_N: AtomicU32 = AtomicU32::new(0);
               static SKIPPING: AtomicBool = AtomicBool::new(false);
               static LAST_END_US: AtomicU64 = AtomicU64::new(0);
-              static LAST_COST_US: AtomicU64 = AtomicU64::new(0);
+              static SKIP_THIS_TICK: AtomicBool = AtomicBool::new(false);
 
               fn epoch() -> Instant {
                   static E: OnceLock<Instant> = OnceLock::new();
@@ -179,10 +179,12 @@ jobs:
                           SKIPPING.store(false, Ordering::Relaxed);
                       }
                   }
+                  let skip = SKIPPING.load(Ordering::Relaxed)
+                      && !SKIP_THIS_TICK.load(Ordering::Relaxed);
+                  SKIP_THIS_TICK.store(skip, Ordering::Relaxed);
               }
 
-              pub fn render_done(start: Instant) {
-                  LAST_COST_US.store(start.elapsed().as_micros() as u64, Ordering::Relaxed);
+              pub fn render_done(_start: Instant) {
                   LAST_END_US.store(now_us(), Ordering::Relaxed);
               }
 
@@ -191,10 +193,8 @@ jobs:
                       return true;
                   }
                   let since = now_us().saturating_sub(LAST_END_US.load(Ordering::Relaxed));
-                  let cost = LAST_COST_US.load(Ordering::Relaxed);
-                  // sustained backlog: draw at most ~25 times per second and spend at most ~25% of the time drawing
-                  let wait = (cost * 3).clamp(40_000, 150_000);
-                  since >= wait
+                  // At most one skipped tick; do not delay a render already overdue by 100 ms.
+                  !SKIP_THIS_TICK.load(Ordering::Relaxed) || since >= 100_000
               }
           }
           '''
@@ -204,9 +204,9 @@ jobs:
           rep("plot_stats_in_tracy(&self.gui.descriptors().wgpu_instance);",
               "plot_stats_in_tracy(&self.gui.descriptors().wgpu_instance);\n                h700_skip::render_done(__h700_t0);")
           rep("player.tick(dt);\n                    new_time + player.time_til_next_frame()",
-              "player.tick(dt);\n                    let __til = player.time_til_next_frame();\n                    h700_skip::note_tick(__til.is_zero());\n                    new_time + __til")
+              "player.tick(dt);\n                    let __til = player.time_til_next_frame();\n                    h700_skip::note_tick(player.is_playing() && std::time::Instant::now() >= new_time + __til);\n                    new_time + __til")
           rep("if player.map(|p| p.needs_render()).unwrap_or_default() || self.gui.needs_render() {\n            self.gui.window().request_redraw();",
-              "if (player.map(|p| p.needs_render()).unwrap_or_default() || self.gui.needs_render())\n            && h700_skip::should_render()\n        {\n            self.gui.window().request_redraw();")
+              "if (player.map(|p| p.needs_render()).unwrap_or_default() && h700_skip::should_render())\n            || self.gui.needs_render()\n        {\n            self.gui.window().request_redraw();")
           p.write_text(s, encoding="utf-8")
           print("OK frame skip patch")
           PY
@@ -343,15 +343,9 @@ jobs:
           rep("Avm1::run_frame(context);",
               "let __t4 = web_time::Instant::now();\n            Avm1::run_frame(context);\n            h700_perf2::add(&h700_perf2::AVM1_US, __t4);")
 
-          rep("            match action.action_type {\n                // DoAction/clip event code.",
-              "            let __label = {\n                let __clip = action.clip.name().map(|n| n.to_utf8_lossy().to_string()).unwrap_or_default();\n                match &action.action_type {\n                    ActionType::Normal { .. } => format!(\"Frame [{}]\", __clip),\n                    ActionType::Initialize { .. } => format!(\"Init [{}]\", __clip),\n                    ActionType::Construct { .. } => format!(\"Construct [{}]\", __clip),\n                    ActionType::Method { name, .. } => format!(\"Method {} [{}]\", name.to_utf8_lossy(), __clip),\n                    ActionType::NotifyListeners { method, .. } => format!(\"Notify {}\", method.to_utf8_lossy()),\n                }\n            };\n            let __ta = web_time::Instant::now();\n            match action.action_type {\n                // DoAction/clip event code.")
-          rep("Avm1::notify_system_listeners(action.clip, listener, method, &args, context);\n                }\n            }\n",
-              "Avm1::notify_system_listeners(action.clip, listener, method, &args, context);\n                }\n            }\n            h700_perf2::add_label(__label, __ta);\n")
-
           s += '''
 
           mod h700_perf2 {
-              use std::collections::HashMap;
               use std::sync::Mutex;
               use std::sync::atomic::{AtomicU64, Ordering};
               use web_time::Instant;
@@ -365,16 +359,6 @@ jobs:
               pub static GC_MAX: AtomicU64 = AtomicU64::new(0);
               pub static ACT_MAX: AtomicU64 = AtomicU64::new(0);
               static LAST: Mutex<Option<Instant>> = Mutex::new(None);
-              static LABELS: Mutex<Option<HashMap<String, (u64, u64)>>> = Mutex::new(None);
-
-              pub fn add_label(label: String, start: Instant) {
-                  let us = start.elapsed().as_micros() as u64;
-                  let mut g = LABELS.lock().unwrap();
-                  let e = g.get_or_insert_with(HashMap::new).entry(label).or_insert((0, 0));
-                  e.0 += us;
-                  e.1 += 1;
-              }
-
               pub fn add(us: &AtomicU64, start: Instant) {
                   us.fetch_add(start.elapsed().as_micros() as u64, Ordering::Relaxed);
               }
@@ -403,14 +387,7 @@ jobs:
                       "H700 CORE max (single call, ms): run_actions {:.0} | gc collect_debt {:.0}",
                       ms(&ACT_MAX), ms(&GC_MAX)
                   );
-                  let mut g = LABELS.lock().unwrap();
-                  if let Some(map) = g.take() {
-                      let mut v: Vec<_> = map.into_iter().collect();
-                      v.sort_by(|a, b| b.1.0.cmp(&a.1.0));
-                      for (label, (us, cnt)) in v.into_iter().take(8) {
-                          eprintln!("H700 TOP {:>7.0} ms {:>6} calls  {}", us as f64 / 1000.0, cnt, label);
-                      }
-                  }
+
               }
           }
           '''
@@ -433,6 +410,9 @@ jobs:
           export "CARGO_PROFILE_${PUP}_STRIP=symbols"
 
           cargo build --profile "$PROFILE" --package ruffle_desktop
+          printf 'profile=%s\ngc_tune=%s\nframe_skip=%s\nmimalloc=%s\nperf_timing=%s\n' \
+            "$PROFILE" '${{ inputs.gc_tune }}' '${{ inputs.frame_skip }}' \
+            '${{ inputs.mimalloc }}' '${{ inputs.perf_timing }}' > /tmp/h7flash-build.txt
 
       - name: Prepare release artifact with recursive libraries
         run: |
@@ -555,6 +535,7 @@ jobs:
             out/libs/libblkid.so.*
 
           cp /tmp/ruffle_revision.txt out/revision.txt
+          cp /tmp/h7flash-build.txt out/build-options.txt
           echo "release-stock-winit-xkb-x11-libs-h700" > out/patch.txt
 
           file out/ruffle | tee out/info.txt
