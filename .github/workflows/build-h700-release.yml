@@ -10,6 +10,10 @@ on:
         options:
           - dist
           - release
+      gc_tune:
+        description: "Let the garbage collector run less often (fewer long pauses; uses a bit more memory)"
+        type: boolean
+        default: true
       frame_skip:
         description: "Skip drawing some frames while the game is behind schedule (keeps game speed closer to normal)"
         type: boolean
@@ -90,6 +94,34 @@ jobs:
         run: |
           . "$HOME/.cargo/env"
           cargo fetch
+
+      - name: Tune GC pacing (optional)
+        if: ${{ inputs.gc_tune }}
+        run: |
+          python3 - <<'PY'
+          # Make the garbage collector wake up less often (fewer, rarer pauses) by editing the default pacing
+          # constants of the gc-arena crate checked out by cargo. If the expected text is not found, nothing changes.
+          import glob, os, re
+
+          home = os.path.expanduser("~")
+          files = glob.glob(os.path.join(home, ".cargo", "git", "checkouts", "gc-arena-*", "*", "src", "*.rs"))
+          changed = False
+          for f in files:
+              s = open(f, encoding="utf-8").read()
+              if "sleep_factor" not in s or "min_sleep" not in s:
+                  continue
+              new = re.sub(r"(sleep_factor:\s*)0\.5\b", r"\g<1>1.0", s, count=1)
+              new = re.sub(r"(min_sleep:\s*)4096\b", r"\g<1>262144", new, count=1)
+              if new != s:
+                  open(f, "w", encoding="utf-8").write(new)
+                  print("gc-arena pacing tuned in", f)
+                  changed = True
+                  for line in new.splitlines():
+                      if "sleep_factor:" in line or "min_sleep:" in line:
+                          print("   ", line.strip())
+          if not changed:
+              print("gc-arena default pacing not found or already different: GC left unchanged")
+          PY
 
       - name: Apply frame skip (optional)
         if: ${{ inputs.frame_skip }}
