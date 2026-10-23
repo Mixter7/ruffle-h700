@@ -25,6 +25,7 @@ jobs:
           gcc -O2 -Wall -Wextra -Werror tools/h700-display-probe/probe.c $(pkg-config --cflags --libs sdl2) -o out/H7Flash-teste-tela/h700-display-probe
           bash -n 'tools/h700-display-probe/H7Flash - Teste de tela.sh'
           cp 'tools/h700-display-probe/H7Flash - Teste de tela.sh' out/
+          cp tools/h700-display-probe/LEIA-ME.txt out/
           file out/H7Flash-teste-tela/h700-display-probe
           SDL_VIDEODRIVER=driver_that_does_not_exist out/H7Flash-teste-tela/h700-display-probe > out/H7Flash-teste-tela/ci-failure-path.txt 2>&1 && exit 1 || test "$?" = 2
           sha256sum out/H7Flash-teste-tela/h700-display-probe > out/H7Flash-teste-tela/sha256.txt
