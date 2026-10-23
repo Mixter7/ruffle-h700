@@ -252,7 +252,7 @@ jobs:
 
           s += '''
 
-          mod h700_perf2 {
+          pub(crate) mod h700_perf2 {
               use std::sync::Mutex;
               use std::sync::atomic::{AtomicU64, Ordering};
               use web_time::Instant;
@@ -262,6 +262,9 @@ jobs:
               pub static MOUSE_US: AtomicU64 = AtomicU64::new(0);
               pub static GC_US: AtomicU64 = AtomicU64::new(0);
               pub static AVM1_US: AtomicU64 = AtomicU64::new(0);
+              pub static SYNC_US: AtomicU64 = AtomicU64::new(0);
+              pub static SYNC_MAX: AtomicU64 = AtomicU64::new(0);
+              pub static SYNC_N: AtomicU64 = AtomicU64::new(0);
               pub static UPDATE_N: AtomicU64 = AtomicU64::new(0);
               pub static GC_MAX: AtomicU64 = AtomicU64::new(0);
               pub static ACT_MAX: AtomicU64 = AtomicU64::new(0);
@@ -287,6 +290,10 @@ jobs:
                   let ms = |a: &AtomicU64| a.swap(0, Ordering::Relaxed) as f64 / 1000.0;
                   let n = UPDATE_N.swap(0, Ordering::Relaxed);
                   eprintln!(
+                      "H700 SYNC: interval {:.3}s | GPU-to-CPU calls {} | total {:.3} ms | max {:.3} ms (includes pixel copy; nested in core timings)",
+                      now.duration_since(start).as_secs_f64(), SYNC_N.swap(0, Ordering::Relaxed), ms(&SYNC_US), ms(&SYNC_MAX)
+                  );
+                  eprintln!(
                       "H700 CORE (2s totals ms): update calls {} | func {:.0} (of which Avm1::run_frame {:.0}) | run_actions {:.0} | update_mouse_state {:.0} | gc collect_debt {:.0}",
                       n, ms(&FUNC_US), ms(&AVM1_US), ms(&ACT_US), ms(&MOUSE_US), ms(&GC_US)
                   );
@@ -299,7 +306,16 @@ jobs:
           }
           '''
           p.write_text(s, encoding="utf-8")
-          print("OK timing2 patch")
+          bitmap = Path("core/src/bitmap/bitmap_data.rs")
+          b = bitmap.read_text(encoding="utf-8")
+          before = "DirtyState::GpuModified(sync_handle, bounds) => {"
+          after = '.expect("Failed to sync BitmapData");'
+          assert b.count(before) == 1
+          assert b.count(after) == 1
+          b = b.replace(before, before + "\n                    let __h700_sync = web_time::Instant::now();", 1)
+          b = b.replace(after, after + "\n                    crate::player::h700_perf2::add_max(&crate::player::h700_perf2::SYNC_US, &crate::player::h700_perf2::SYNC_MAX, __h700_sync);\n                    crate::player::h700_perf2::SYNC_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);", 1)
+          bitmap.write_text(b, encoding="utf-8")
+          print("OK timing2 and BitmapData sync patches")
           PY
           grep -n "h700_perf2" core/src/player.rs | head -5
 
