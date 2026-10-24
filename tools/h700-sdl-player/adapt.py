@@ -16,10 +16,24 @@ rep('    let (sender, receiver) = mpsc::channel::<RuffleEvent>();','''    use gl
     }
     let _ = video_subsystem.gl_set_swap_interval(sdl2::video::SwapInterval::VSync);
     let (sender, receiver) = mpsc::channel::<RuffleEvent>();''')
-rep('                                dpad2wasd = !dpad2wasd;\n                                backbtn_pressed = false;', "                                break 'running;")
+rep('''                        Button::Start => {
+                            if backbtn_pressed {
+                                dpad2wasd = !dpad2wasd;
+                                backbtn_pressed = false;
+                            }
+                        }''', '')
 rep('use ruffle_video_external::backend::ExternalVideoBackend;','')
-rep('    let mut use_mouse = false;', '    let mut use_mouse = false;\n    let mut h700_left_mouse = false;\n    let mut h700_right_mouse = false;')
+rep('    let mut use_mouse = false;', '    let mut use_mouse = false;\n    let mut h700_left_mouse = false;\n    let mut h700_right_mouse = false;\n    let mut h700_exit_chord = H700ExitChord::default();')
 rep('        for event in event_pump.poll_iter() {', '''        for event in event_pump.poll_iter() {
+            // Track both orders before forwarding START or toggling the cursor.
+            match &event {
+                Event::ControllerButtonDown { button, .. } => {
+                    if h700_exit_chord.update(*button, true) { break 'running; }
+                }
+                Event::ControllerButtonUp { button, .. } => { h700_exit_chord.update(*button, false); }
+                Event::ControllerDeviceRemoved { .. } => { h700_exit_chord = H700ExitChord::default(); }
+                _ => {}
+            }
             if matches!(event, Event::ControllerButtonDown { button: Button::Guide, .. }) {
                 // Release mouse buttons before hiding the cursor, even with R2/L2 held.
                 if let Some(player) = playerbox.as_ref() {
@@ -78,12 +92,38 @@ rep('''                        Button::X => {
 s,n=re.subn(r'                    if use_mouse && button == Button::Y \{.*?(?=                    if !use_mouse)', '', s, flags=re.S)
 assert n==2,n
 s += '''
+#[derive(Default)]
+struct H700ExitChord { menu: bool, start: bool }
+impl H700ExitChord {
+    fn update(&mut self, button: Button, pressed: bool) -> bool {
+        match button {
+            Button::Guide => self.menu = pressed,
+            Button::Start => self.start = pressed,
+            _ => return false,
+        }
+        self.menu && self.start
+    }
+}
 fn h700_trigger_pressed(was_pressed: bool, value: i16) -> bool {
     if was_pressed { value >= TRIGGER_RELEASE_THRESHOLD } else { value > TRIGGER_PRESS_THRESHOLD }
 }
 #[cfg(test)]
 mod h700_mouse_tests {
     use super::*;
+    #[test]
+    fn exit_requires_menu_and_start_held_in_either_order() {
+        for (first, second) in [(Button::Guide, Button::Start), (Button::Start, Button::Guide)] {
+            let mut chord = H700ExitChord::default();
+            assert!(!chord.update(first, true));
+            assert!(!chord.update(first, false));
+            assert!(!chord.update(second, true));
+            assert!(chord.update(first, true));
+        }
+        let mut chord = H700ExitChord::default();
+        assert!(!chord.update(Button::Back, true));
+        assert!(!chord.update(Button::Start, true));
+        assert!(!chord.update(Button::Paddle2, true));
+    }
     #[test]
     fn trigger_click_has_hysteresis_and_releases() {
         assert!(!h700_trigger_pressed(false, 0));
@@ -164,4 +204,4 @@ s=s.replace('println!("按钮按下: {:?}", button);','').replace('println!("按
 p.write_text(s,encoding='utf-8')
 c=root/'sdl2test-u/Cargo.toml'
 c.write_text(c.read_text(encoding='utf-8').replace('ruffle_video_external = { path = "../video/external" }',''),encoding='utf-8')
-print('H700 SDL/GLES3 adaptation applied; full-size textures, SELECT+START exit.')
+print('H700 SDL/GLES3 adaptation applied; full-size textures, MENU+START exit.')
