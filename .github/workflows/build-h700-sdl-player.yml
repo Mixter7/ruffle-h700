@@ -1,0 +1,52 @@
+name: H700 experimental SDL player
+on:
+  workflow_dispatch:
+  push:
+    branches: [h700-upstream-update]
+    paths:
+      - tools/h700-sdl-player/**
+      - .github/workflows/build-h700-sdl-player.yml
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    container: debian:bullseye
+    steps:
+      - name: Dependencies
+        run: |
+          sed -i -e 's|deb.debian.org/debian-security|archive.debian.org/debian-security|g' -e 's|security.debian.org/debian-security|archive.debian.org/debian-security|g' -e 's|deb.debian.org/debian|archive.debian.org/debian|g' -e '/bullseye-updates/d' /etc/apt/sources.list
+          apt-get update
+          apt-get install -y build-essential libsdl2-dev libasound2-dev libudev-dev pkg-config git curl ca-certificates python3 default-jre-headless file
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: aweigit/ruffle-miyooflip
+          ref: 2d8383792ad9ca984d14a2787858151ff03e4434
+          path: sdl-source
+      - name: Adapt for H700
+        run: python3 tools/h700-sdl-player/adapt.py sdl-source
+      - name: Rust
+        run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+      - name: Test and build
+        working-directory: sdl-source
+        run: |
+          . "$HOME/.cargo/env"
+          export RUSTFLAGS='-C target-cpu=cortex-a53 -A dangerous_implicit_autorefs'
+          cargo test -p sdl2test-u --bin sdl2test-u
+          cargo build --release -p sdl2test-u
+      - name: Package
+        run: |
+          mkdir -p out/H7Flash-SDL/licenses
+          cp sdl-source/target/release/sdl2test-u out/H7Flash-SDL/ruffle-sdl
+          cp sdl-source/LICENSE* out/H7Flash-SDL/licenses/
+          file out/H7Flash-SDL/ruffle-sdl
+          ldd out/H7Flash-SDL/ruffle-sdl > out/H7Flash-SDL/dependencies.txt
+          ! grep -q 'not found' out/H7Flash-SDL/dependencies.txt
+          sha256sum out/H7Flash-SDL/ruffle-sdl > out/H7Flash-SDL/sha256.txt
+          echo "$GITHUB_SHA" > out/H7Flash-SDL/adaptation-revision.txt
+          echo '2d8383792ad9ca984d14a2787858151ff03e4434' > out/H7Flash-SDL/source-revision.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H7Flash-SDL-experimental
+          path: out/
