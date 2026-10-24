@@ -19,7 +19,6 @@ use gc_arena::lock::{Lock, RefLock};
 use gc_arena::{Collect, Gc, GcWeak, Mutation};
 use ruffle_common::utils::HasPrefixField;
 use std::cell::{Ref, RefMut};
-use std::sync::Arc;
 
 use super::interactive::Avm2MousePick;
 
@@ -42,11 +41,11 @@ pub struct LoaderDisplayData<'gc> {
     base: InteractiveObjectBase<'gc>,
     container: RefLock<ChildContainer<'gc>>,
     avm2_object: Lock<Option<Avm2StageObject<'gc>>>,
-    movie: Arc<SwfMovie>,
+    movie: SwfMovie<'gc>,
 }
 
 impl<'gc> LoaderDisplay<'gc> {
-    pub fn empty(activation: &mut Activation<'_, 'gc>, movie: Arc<SwfMovie>) -> Self {
+    pub fn empty(activation: &mut Activation<'_, 'gc>, movie: SwfMovie<'gc>) -> Self {
         let obj = LoaderDisplay(Gc::new(
             activation.gc(),
             LoaderDisplayData {
@@ -70,10 +69,6 @@ impl<'gc> LoaderDisplay<'gc> {
 impl<'gc> TDisplayObject<'gc> for LoaderDisplay<'gc> {
     fn base(self) -> Gc<'gc, DisplayObjectBase<'gc>> {
         HasPrefixField::as_prefix_gc(self.raw_interactive())
-    }
-
-    fn instantiate(self, gc_context: &Mutation<'gc>) -> DisplayObject<'gc> {
-        Self(Gc::new(gc_context, self.0.as_ref().clone())).into()
     }
 
     fn id(self) -> CharacterId {
@@ -129,8 +124,8 @@ impl<'gc> TDisplayObject<'gc> for LoaderDisplay<'gc> {
         self.set_default_instance_name(context);
     }
 
-    fn movie(self) -> Arc<SwfMovie> {
-        self.0.movie.clone()
+    fn movie(self) -> SwfMovie<'gc> {
+        self.0.movie
     }
 
     fn on_parent_removed(self, context: &mut UpdateContext<'gc>) {
@@ -178,6 +173,10 @@ impl<'gc> TInteractiveObject<'gc> for LoaderDisplay<'gc> {
         options.set(HitTestOptions::SKIP_MASK, self.maskee().is_none());
 
         if self.visible() {
+            if !self.global_in_scroll_rect(point) {
+                return Avm2MousePick::Miss;
+            }
+
             // A loader has at most one child.
             if let Some(child) = self.iter_render_list().next() {
                 if let Some(int) = child.as_interactive() {

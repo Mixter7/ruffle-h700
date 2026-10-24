@@ -3,8 +3,8 @@ use crate::gui::{GuiController, MENU_HEIGHT};
 use crate::player::{LaunchOptions, PlayerController};
 use crate::preferences::GlobalPreferences;
 use crate::util::{
-    get_screen_size, gilrs_button_to_gamepad_button, plot_stats_in_tracy,
-    winit_input_to_ruffle_key_descriptor, winit_to_ruffle_text_control,
+    get_screen_size, gilrs_button_to_gamepad_button, winit_input_to_ruffle_key_descriptor,
+    winit_to_ruffle_text_control,
 };
 use anyhow::Error;
 use gilrs::{Event, EventType, Gilrs};
@@ -28,7 +28,16 @@ struct MainWindow {
     gui: GuiController,
     player: PlayerController,
     minimized: bool,
+    /// Set from `WindowEvent::Occluded`, which winit only reports on macOS and X11
+    /// (and on X11 only without a compositor). Always false elsewhere.
+    occluded: bool,
     mouse_pos: PhysicalPosition<f64>,
+
+    /// Whether `mouse_pos` changed since the last `MouseMove` sent to the player.
+    /// Moves are coalesced, so that a movie with slow mouse handlers sees only
+    /// the latest position instead of every move queued while it was busy.
+    mouse_move_pending: bool,
+
     modifiers: Modifiers,
     min_window_size: LogicalSize<u32>,
     max_window_size: PhysicalSize<u32>,
@@ -45,16 +54,11 @@ struct MainWindow {
 impl MainWindow {
     pub fn window_event(&mut self, event_loop: &ActiveEventLoop, event: WindowEvent) {
         if matches!(event, WindowEvent::RedrawRequested) {
-            // Don't render when minimized to avoid potential swap chain errors in `wgpu`.
-            if !self.minimized {
-                let mut player = self.player.get();
-                if let Some(ref mut player) = player {
-                    // Even if the movie is paused, user interaction with debug tools can change the render output
-                    player.render();
-                }
-
-                self.gui.render(player);
-                plot_stats_in_tracy(&self.gui.descriptors().wgpu_instance);
+            // Don't render when nobody can see the result: while minimized, the
+            // surface also keeps the size it had before, as `GuiController::resize`
+            // refuses to reconfigure it to a zero size.
+            if !self.minimized && !self.occluded {
+                self.gui.render(self.player.get());
             }
 
             // Important that we return here, or we'll get a feedback loop with egui
@@ -71,7 +75,11 @@ impl MainWindow {
                 event_loop.exit();
             }
             WindowEvent::Resized(size) => {
-                // TODO: Change this when winit adds a `Window::minimized` or `WindowEvent::Minimize`.
+                // How minimizing shows up on Windows; winit still has no
+                // `WindowEvent::Minimize`. (`Window::is_minimized` does exist by
+                // now, but it has to be polled, and it wouldn't tell us anything
+                // new: macOS reports minimized windows as occluded instead, and
+                // on Wayland it always returns `None`.)
                 self.minimized = size.width == 0 && size.height == 0;
 
                 if let Some(mut player) = self.player.get() {
@@ -87,6 +95,13 @@ impl MainWindow {
                     self.loaded = LoadingState::Loaded;
                 }
             }
+            WindowEvent::Occluded(occluded) => {
+                self.occluded = occluded;
+                if !occluded {
+                    // Nothing repaints us on its own if the movie is paused.
+                    self.gui.window().request_redraw();
+                }
+            }
             WindowEvent::CursorMoved { position, .. } => {
                 if self.gui.is_context_menu_visible() {
                     return;
@@ -100,10 +115,12 @@ impl MainWindow {
                 }
 
                 self.mouse_pos = position;
-                let (x, y) = self.gui.window_to_movie_position(position);
-                let event = PlayerEvent::MouseMove { x, y };
-                self.player.handle_event(event);
-                self.check_redraw();
+
+                // We can't handle mouse move here, doing so would put Ruffle in
+                // a busy loop processing every queued CursorMoved event. Flash
+                // Player does not queue mouse moves and instead skips them
+                // if they happen when the movie is busy.
+                self.mouse_move_pending = true;
             }
             WindowEvent::DroppedFile(file) => {
                 if let Some(content_descriptor) = ContentDescriptor::new_local(&file, None) {
@@ -115,10 +132,10 @@ impl MainWindow {
                 }
             }
             WindowEvent::Focused(true) => {
-                self.player.handle_event(PlayerEvent::FocusGained);
+                self.handle_player_event(PlayerEvent::FocusGained);
             }
             WindowEvent::Focused(false) => {
-                self.player.handle_event(PlayerEvent::FocusLost);
+                self.handle_player_event(PlayerEvent::FocusLost);
             }
             WindowEvent::MouseInput { button, state, .. } => {
                 if self.gui.is_context_menu_visible() {
@@ -145,7 +162,7 @@ impl MainWindow {
                     },
                     ElementState::Released => PlayerEvent::MouseUp { x, y, button },
                 };
-                let handled = self.player.handle_event(event);
+                let handled = self.handle_player_event(event);
                 if !handled && state == ElementState::Pressed && button == RuffleMouseButton::Right
                 {
                     // Show context menu.
@@ -162,7 +179,6 @@ impl MainWindow {
                         self.gui.show_context_menu(context_menu, close_event);
                     }
                 }
-                self.check_redraw();
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 if self.gui.is_context_menu_visible() {
@@ -176,23 +192,21 @@ impl MainWindow {
                     MouseScrollDelta::PixelDelta(pos) => MouseWheelDelta::Pixels(pos.y),
                 };
                 let event = PlayerEvent::MouseWheel { delta };
-                self.player.handle_event(event);
-                self.check_redraw();
+                self.handle_player_event(event);
             }
             WindowEvent::CursorEntered { .. } => {
                 if let Some(mut player) = self.player.get() {
                     player.set_mouse_in_stage(true);
-                    if player.needs_render() {
-                        self.gui.window().request_redraw();
-                    }
                 }
             }
             WindowEvent::CursorLeft { .. } => {
+                // The movie has to see the latest position while the mouse
+                // is still in the stage.
+                self.flush_mouse_move();
                 if let Some(mut player) = self.player.get() {
                     player.set_mouse_in_stage(false);
                 }
-                self.player.handle_event(PlayerEvent::MouseLeave);
-                self.check_redraw();
+                self.handle_player_event(PlayerEvent::MouseLeave);
             }
             WindowEvent::ModifiersChanged(new_modifiers) => {
                 self.modifiers = new_modifiers;
@@ -217,34 +231,31 @@ impl MainWindow {
                 let key = winit_input_to_ruffle_key_descriptor(&event);
                 match event.state {
                     ElementState::Pressed => {
-                        self.player.handle_event(PlayerEvent::KeyDown { key });
+                        self.handle_player_event(PlayerEvent::KeyDown { key });
                         if let Some(control_code) =
                             winit_to_ruffle_text_control(&event, self.modifiers)
                         {
-                            self.player
-                                .handle_event(PlayerEvent::TextControl { code: control_code });
+                            self.handle_player_event(PlayerEvent::TextControl {
+                                code: control_code,
+                            });
                         } else if let Some(text) = event.text {
                             for codepoint in text.chars() {
-                                self.player
-                                    .handle_event(PlayerEvent::TextInput { codepoint });
+                                self.handle_player_event(PlayerEvent::TextInput { codepoint });
                             }
                         }
                     }
                     ElementState::Released => {
-                        self.player.handle_event(PlayerEvent::KeyUp { key });
+                        self.handle_player_event(PlayerEvent::KeyUp { key });
                     }
                 };
-                self.check_redraw();
             }
             WindowEvent::Ime(ime) => match ime {
                 Ime::Enabled => {}
                 Ime::Preedit(text, cursor) => {
-                    self.player
-                        .handle_event(PlayerEvent::Ime(ImeEvent::Preedit(text, cursor)));
+                    self.handle_player_event(PlayerEvent::Ime(ImeEvent::Preedit(text, cursor)));
                 }
                 Ime::Commit(text) => {
-                    self.player
-                        .handle_event(PlayerEvent::Ime(ImeEvent::Commit(text)));
+                    self.handle_player_event(PlayerEvent::Ime(ImeEvent::Commit(text)));
                 }
                 Ime::Disabled => {}
             },
@@ -349,20 +360,20 @@ impl MainWindow {
     }
 
     fn about_to_wait(&mut self, gilrs: Option<&mut Gilrs>) {
+        // When we don't have any more pending events, flush any pending mouse
+        // moves, so that they can get coalesced properly.
+        self.flush_mouse_move();
+
         if let Some(Event { event, .. }) = gilrs.and_then(|gilrs| gilrs.next_event()) {
             match event {
                 EventType::ButtonPressed(button, _) => {
                     if let Some(button) = gilrs_button_to_gamepad_button(button) {
-                        self.player
-                            .handle_event(PlayerEvent::GamepadButtonDown { button });
-                        self.check_redraw();
+                        self.handle_player_event(PlayerEvent::GamepadButtonDown { button });
                     }
                 }
                 EventType::ButtonReleased(button, _) => {
                     if let Some(button) = gilrs_button_to_gamepad_button(button) {
-                        self.player
-                            .handle_event(PlayerEvent::GamepadButtonUp { button });
-                        self.check_redraw();
+                        self.handle_player_event(PlayerEvent::GamepadButtonUp { button });
                     }
                 }
                 _ => {}
@@ -381,14 +392,44 @@ impl MainWindow {
                     player.tick(dt);
                     new_time + player.time_til_next_frame()
                 });
-                self.check_redraw();
             }
         }
+
+        self.render_movie_if_needed();
     }
 
-    fn check_redraw(&self) {
-        let player = self.player.get();
-        if player.map(|p| p.needs_render()).unwrap_or_default() || self.gui.needs_render() {
+    fn handle_player_event(&mut self, event: PlayerEvent) -> bool {
+        // Apply any pending mouse moves, so that the movie sees the latest
+        // position before e.g. a click.
+        self.flush_mouse_move();
+        let handled = self.player.handle_event(event);
+
+        // Handling an event may have made the movie need rendering (on demand).
+        self.render_movie_if_needed();
+        handled
+    }
+
+    fn flush_mouse_move(&mut self) {
+        if !std::mem::take(&mut self.mouse_move_pending) {
+            return;
+        }
+
+        let (x, y) = self.gui.window_to_movie_position(self.mouse_pos);
+        self.player.handle_event(PlayerEvent::MouseMove { x, y });
+        self.render_movie_if_needed();
+    }
+
+    fn render_movie_if_needed(&self) {
+        let mut player = self.player.get();
+        let player_needs_render = player.as_ref().is_some_and(|p| p.needs_render());
+        if player_needs_render
+            && !self.minimized
+            && !self.occluded
+            && let Some(player) = player.as_deref_mut()
+        {
+            player.render();
+        }
+        if player_needs_render || self.gui.needs_render() {
             self.gui.window().request_redraw();
         }
     }
@@ -565,7 +606,9 @@ impl ApplicationHandler<RuffleEvent> for App {
                 start_fullscreen,
                 loaded,
                 minimized: false,
+                occluded: false,
                 mouse_pos: PhysicalPosition::new(0.0, 0.0),
+                mouse_move_pending: false,
                 modifiers: Modifiers::default(),
                 time: Instant::now(),
                 next_frame_time: None,

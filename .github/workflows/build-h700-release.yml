@@ -1,4 +1,4 @@
-name: Build H7Flash Ruffle (H700)
+name: Build H7Flash Ruffle (H700 upstream candidate)
 
 on:
   workflow_dispatch:
@@ -14,10 +14,6 @@ on:
         description: "Experimental GC pacing: more memory, pause duration must be measured"
         type: boolean
         default: false
-      frame_skip:
-        description: "Skip drawing some frames while the game is behind schedule (keeps game speed closer to normal)"
-        type: boolean
-        default: true
       mimalloc:
         description: "Use the mimalloc memory allocator (usually a bit faster than the system one)"
         type: boolean
@@ -123,95 +119,6 @@ jobs:
               print("gc-arena default pacing not found or already different: GC left unchanged")
           PY
 
-      - name: Apply frame skip (optional)
-        if: ${{ inputs.frame_skip }}
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path("desktop/src/app.rs")
-          s = p.read_text(encoding="utf-8")
-
-          def rep(old, new):
-              global s
-              assert s.count(old) == 1, old
-              s = s.replace(old, new, 1)
-
-          mod = '''
-          mod h700_skip {
-              // Skip drawing some frames while the game logic is persistently behind schedule, so slow-to-draw
-              // scenes do not slow the game down. Hysteresis avoids flipping between modes frame by frame
-              // (that looked like micro-stutter). Disable with HOBO_NO_SKIP=1.
-              use std::sync::OnceLock;
-              use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-              use std::time::Instant;
-
-              static BEHIND_N: AtomicU32 = AtomicU32::new(0);
-              static OK_N: AtomicU32 = AtomicU32::new(0);
-              static SKIPPING: AtomicBool = AtomicBool::new(false);
-              static LAST_END_US: AtomicU64 = AtomicU64::new(0);
-              static SKIP_THIS_TICK: AtomicBool = AtomicBool::new(false);
-
-              fn epoch() -> Instant {
-                  static E: OnceLock<Instant> = OnceLock::new();
-                  *E.get_or_init(Instant::now)
-              }
-
-              fn now_us() -> u64 {
-                  epoch().elapsed().as_micros() as u64
-              }
-
-              fn disabled() -> bool {
-                  static D: OnceLock<bool> = OnceLock::new();
-                  *D.get_or_init(|| std::env::var("HOBO_NO_SKIP").map(|v| v == "1").unwrap_or(false))
-              }
-
-              pub fn note_tick(behind: bool) {
-                  if behind {
-                      OK_N.store(0, Ordering::Relaxed);
-                      let n = BEHIND_N.fetch_add(1, Ordering::Relaxed) + 1;
-                      if n >= 6 {
-                          SKIPPING.store(true, Ordering::Relaxed);
-                      }
-                  } else {
-                      BEHIND_N.store(0, Ordering::Relaxed);
-                      let n = OK_N.fetch_add(1, Ordering::Relaxed) + 1;
-                      if n >= 4 {
-                          SKIPPING.store(false, Ordering::Relaxed);
-                      }
-                  }
-                  let skip = SKIPPING.load(Ordering::Relaxed)
-                      && !SKIP_THIS_TICK.load(Ordering::Relaxed);
-                  SKIP_THIS_TICK.store(skip, Ordering::Relaxed);
-              }
-
-              pub fn render_done(_start: Instant) {
-                  LAST_END_US.store(now_us(), Ordering::Relaxed);
-              }
-
-              pub fn should_render() -> bool {
-                  if disabled() || !SKIPPING.load(Ordering::Relaxed) {
-                      return true;
-                  }
-                  let since = now_us().saturating_sub(LAST_END_US.load(Ordering::Relaxed));
-                  // At most one skipped tick; do not delay a render already overdue by 100 ms.
-                  !SKIP_THIS_TICK.load(Ordering::Relaxed) || since >= 100_000
-              }
-          }
-          '''
-          rep("impl MainWindow {", mod + "\nimpl MainWindow {")
-          rep("if !self.minimized {\n                let mut player = self.player.get();",
-              "if !self.minimized {\n                let __h700_t0 = std::time::Instant::now();\n                let mut player = self.player.get();")
-          rep("plot_stats_in_tracy(&self.gui.descriptors().wgpu_instance);",
-              "plot_stats_in_tracy(&self.gui.descriptors().wgpu_instance);\n                h700_skip::render_done(__h700_t0);")
-          rep("player.tick(dt);\n                    new_time + player.time_til_next_frame()",
-              "player.tick(dt);\n                    let __til = player.time_til_next_frame();\n                    h700_skip::note_tick(player.is_playing() && std::time::Instant::now() >= new_time + __til);\n                    new_time + __til")
-          rep("if player.map(|p| p.needs_render()).unwrap_or_default() || self.gui.needs_render() {\n            self.gui.window().request_redraw();",
-              "if (player.map(|p| p.needs_render()).unwrap_or_default() && h700_skip::should_render())\n            || self.gui.needs_render()\n        {\n            self.gui.window().request_redraw();")
-          p.write_text(s, encoding="utf-8")
-          print("OK frame skip patch")
-          PY
-          grep -n "h700_skip" desktop/src/app.rs | head -5
-
       - name: Apply mimalloc (optional)
         if: ${{ inputs.mimalloc }}
         run: |
@@ -308,8 +215,8 @@ jobs:
           pairs = [
            ("player.render();",
             "{ let __t = std::time::Instant::now(); player.render(); h700_perf::add(&h700_perf::REND_US, &h700_perf::REND_N, &h700_perf::REND_MAX, &h700_perf::REND_SLOW, __t); }"),
-           ("self.gui.render(player);",
-            "{ let __t = std::time::Instant::now(); self.gui.render(player); h700_perf::add(&h700_perf::GUI_US, &h700_perf::GUI_N, &h700_perf::GUI_MAX, &h700_perf::GUI_SLOW, __t); h700_perf::report(); }"),
+           ("self.gui.render(self.player.get());",
+            "{ let __t = std::time::Instant::now(); self.gui.render(self.player.get()); h700_perf::add(&h700_perf::GUI_US, &h700_perf::GUI_N, &h700_perf::GUI_MAX, &h700_perf::GUI_SLOW, __t); h700_perf::report(); }"),
            ("player.tick(dt);",
             "{ let __t = std::time::Instant::now(); player.tick(dt); h700_perf::add(&h700_perf::TICK_US, &h700_perf::TICK_N, &h700_perf::TICK_MAX, &h700_perf::TICK_SLOW, __t); }"),
           ]
@@ -345,7 +252,7 @@ jobs:
 
           s += '''
 
-          mod h700_perf2 {
+          pub(crate) mod h700_perf2 {
               use std::sync::Mutex;
               use std::sync::atomic::{AtomicU64, Ordering};
               use web_time::Instant;
@@ -355,6 +262,9 @@ jobs:
               pub static MOUSE_US: AtomicU64 = AtomicU64::new(0);
               pub static GC_US: AtomicU64 = AtomicU64::new(0);
               pub static AVM1_US: AtomicU64 = AtomicU64::new(0);
+              pub static SYNC_US: AtomicU64 = AtomicU64::new(0);
+              pub static SYNC_MAX: AtomicU64 = AtomicU64::new(0);
+              pub static SYNC_N: AtomicU64 = AtomicU64::new(0);
               pub static UPDATE_N: AtomicU64 = AtomicU64::new(0);
               pub static GC_MAX: AtomicU64 = AtomicU64::new(0);
               pub static ACT_MAX: AtomicU64 = AtomicU64::new(0);
@@ -380,6 +290,10 @@ jobs:
                   let ms = |a: &AtomicU64| a.swap(0, Ordering::Relaxed) as f64 / 1000.0;
                   let n = UPDATE_N.swap(0, Ordering::Relaxed);
                   eprintln!(
+                      "H700 SYNC: interval {:.3}s | GPU-to-CPU calls {} | total {:.3} ms | max {:.3} ms (includes pixel copy; nested in core timings)",
+                      now.duration_since(start).as_secs_f64(), SYNC_N.swap(0, Ordering::Relaxed), ms(&SYNC_US), ms(&SYNC_MAX)
+                  );
+                  eprintln!(
                       "H700 CORE (2s totals ms): update calls {} | func {:.0} (of which Avm1::run_frame {:.0}) | run_actions {:.0} | update_mouse_state {:.0} | gc collect_debt {:.0}",
                       n, ms(&FUNC_US), ms(&AVM1_US), ms(&ACT_US), ms(&MOUSE_US), ms(&GC_US)
                   );
@@ -392,15 +306,24 @@ jobs:
           }
           '''
           p.write_text(s, encoding="utf-8")
-          print("OK timing2 patch")
+          bitmap = Path("core/src/bitmap/bitmap_data.rs")
+          b = bitmap.read_text(encoding="utf-8")
+          before = "DirtyState::GpuModified(sync_handle, bounds) => {"
+          after = '.expect("Failed to sync BitmapData");'
+          assert b.count(before) == 1
+          assert b.count(after) == 1
+          b = b.replace(before, before + "\n                    let __h700_sync = web_time::Instant::now();", 1)
+          b = b.replace(after, after + "\n                    crate::player::h700_perf2::add_max(&crate::player::h700_perf2::SYNC_US, &crate::player::h700_perf2::SYNC_MAX, __h700_sync);\n                    crate::player::h700_perf2::SYNC_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);", 1)
+          bitmap.write_text(b, encoding="utf-8")
+          print("OK timing2 and BitmapData sync patches")
           PY
           grep -n "h700_perf2" core/src/player.rs | head -5
 
-      - name: Test bitmap copy regressions
+      - name: Test upstream core library
         run: |
           . "$HOME/.cargo/env"
           export RUSTFLAGS="-A dangerous_implicit_autorefs -C target-cpu=cortex-a53"
-          cargo test --package ruffle_core --lib h700_copy_tests
+          cargo test --package ruffle_core --lib
 
       - name: Build Ruffle
         run: |
@@ -416,8 +339,8 @@ jobs:
           export "CARGO_PROFILE_${PUP}_STRIP=symbols"
 
           cargo build --profile "$PROFILE" --package ruffle_desktop
-          printf 'profile=%s\ngc_tune=%s\nframe_skip=%s\nmimalloc=%s\nperf_timing=%s\n' \
-            "$PROFILE" '${{ inputs.gc_tune }}' '${{ inputs.frame_skip }}' \
+          printf 'profile=%s\ngc_tune=%s\nframe_policy=%s\nmimalloc=%s\nperf_timing=%s\n' \
+            "$PROFILE" '${{ inputs.gc_tune }}' 'upstream' \
             '${{ inputs.mimalloc }}' '${{ inputs.perf_timing }}' > /tmp/h7flash-build.txt
 
       - name: Prepare release artifact with recursive libraries
@@ -542,6 +465,8 @@ jobs:
 
           cp /tmp/ruffle_revision.txt out/revision.txt
           cp /tmp/h7flash-build.txt out/build-options.txt
+          echo 'upstream=348a692b018cdda13153959a2aadd55060f44cd5' >> out/build-options.txt
+          sha256sum out/ruffle > out/ruffle.sha256
           echo "release-stock-winit-xkb-x11-libs-h700" > out/patch.txt
 
           file out/ruffle | tee out/info.txt

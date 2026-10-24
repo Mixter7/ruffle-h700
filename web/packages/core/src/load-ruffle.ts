@@ -9,10 +9,12 @@ import {
     signExtensions,
     referenceTypes,
 } from "wasm-feature-detect";
-import type { RuffleInstanceBuilder, ZipWriter } from "../dist/ruffle_web";
-import { setPolyfillsOnLoad } from "./js-polyfills";
+import type { RuffleInstanceBuilder, ZipWriter } from "../dist/ruffle_web.js";
+import { setPolyfillsOnLoad } from "./js-polyfills.js";
+import { publicPath } from "./public-path.js";
+import type { BaseLoadOptions } from "./public/config/load-options.js";
 
-import { internalSourceApi } from "./internal/internal-source-api";
+import { internalSourceApi } from "./internal/internal-source-api.js";
 
 type ProgressCallback = (bytesLoaded: number, bytesTotal: number) => void;
 
@@ -65,13 +67,33 @@ async function fetchRuffle(
         RuffleInstanceBuilder,
         ZipWriter,
     } = await (extensionsSupported
-        ? import("../dist/ruffle_web")
+        ? // @ts-expect-error TS2307 TypeScript compiler is trying to do the import.
+          import("./ruffle_web.js")
         : // @ts-expect-error TS2307 TypeScript compiler is trying to do the import.
-          import("../dist/%FALLBACK_WASM%"));
+          import("./%FALLBACK_WASM%.js"));
     let response;
-    const wasmUrl = extensionsSupported
-        ? new URL("../dist/ruffle_web_bg.wasm", import.meta.url)
-        : new URL("../dist/%FALLBACK_WASM%_bg.wasm", import.meta.url);
+
+    let wasmUrl: URL;
+
+    if (typeof import.meta.url === "string") {
+        // ES module consumers (e.g. the Vite-built demo): bundlers recognise
+        // this pattern and emit the .wasm as an asset. The path must stay a
+        // string literal for them to do so.
+        wasmUrl = extensionsSupported
+            ? new URL("./ruffle_web_bg.wasm", import.meta.url)
+            : new URL("./%FALLBACK_WASM%_bg.wasm", import.meta.url);
+    } else {
+        // IIFE builds (extension, selfhosted): import.meta.url is defined away
+        // by esbuild, and the .wasm sits next to the script.
+        const baseUrl = new URL(
+            publicPath((window.RufflePlayer?.config ?? {}) as BaseLoadOptions),
+            document.baseURI,
+        );
+
+        wasmUrl = extensionsSupported
+            ? new URL("./ruffle_web_bg.wasm", baseUrl)
+            : new URL("./%FALLBACK_WASM%_bg.wasm", baseUrl);
+    }
     const wasmResponse = await fetch(wasmUrl);
     // The Pale Moon browser lacks full support for ReadableStream.
     // However, ReadableStream itself is defined.

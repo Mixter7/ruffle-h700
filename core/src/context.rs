@@ -10,6 +10,7 @@ use crate::avm2::api_version::ApiVersion;
 use crate::avm2::{Avm2, LoaderInfoObject, SharedObjectObject, SoundChannelObject};
 use crate::backend::{
     audio::{AudioBackend, AudioManager, SoundHandle, SoundInstanceHandle},
+    locale::LocaleBackend,
     log::LogBackend,
     navigator::NavigatorBackend,
     storage::StorageBackend,
@@ -36,7 +37,7 @@ use crate::string::HasStringContext;
 use crate::string::{AvmString, StringContext};
 use crate::stub::StubCollection;
 use crate::system_properties::SystemProperties;
-use crate::tag_utils::{SwfMovie, SwfSlice};
+use crate::tag_utils::{SwfMovie, SwfMovieData, SwfSlice};
 use crate::timer::Timers;
 use crate::vminterface::Instantiator;
 use async_channel::Sender;
@@ -90,7 +91,7 @@ pub struct UpdateContext<'gc> {
     pub needs_render: &'gc mut bool,
 
     /// The root SWF file.
-    pub root_swf: &'gc mut Arc<SwfMovie>,
+    pub root_swf: &'gc mut SwfMovie<'gc>,
 
     /// The audio backend, used by display objects and AVM to play audio.
     pub audio: &'gc mut dyn AudioBackend,
@@ -117,6 +118,9 @@ pub struct UpdateContext<'gc> {
 
     /// The video backend, used for video decoding
     pub video: &'gc mut dyn VideoBackend,
+
+    /// The locale backend.
+    pub locale: &'gc mut dyn LocaleBackend,
 
     /// The RNG, used by the AVM `RandomNumber` opcode, `Math.random(),` and `random()`.
     pub rng: &'gc mut AvmRng,
@@ -270,6 +274,16 @@ impl<'gc> UpdateContext<'gc> {
             .set_local_sound_transform(instance, sound_transform);
     }
 
+    /// Set the local sound transform for each instance in a handle.
+    pub fn set_sound_transform_with_handle(
+        &mut self,
+        sound: SoundHandle,
+        sound_transform: SoundTransform,
+    ) {
+        self.audio_manager
+            .set_sound_transform_with_handle(sound, sound_transform);
+    }
+
     pub fn start_sound(
         &mut self,
         sound: SoundHandle,
@@ -342,7 +356,7 @@ impl<'gc> UpdateContext<'gc> {
     /// This should only be called once, as it makes no attempt at proper clean-up
     /// of previous stage contents. If you need to load a new root movie, you
     /// should use `replace_root_movie`.
-    pub fn set_root_movie(&mut self, movie: SwfMovie) {
+    pub fn set_root_movie(&mut self, movie: SwfMovieData) {
         if !self.forced_frame_rate {
             *self.frame_rate = movie.frame_rate().into();
         }
@@ -355,7 +369,7 @@ impl<'gc> UpdateContext<'gc> {
             self.frame_rate,
         );
 
-        *self.root_swf = Arc::new(movie);
+        *self.root_swf = SwfMovie::new(self.gc(), movie);
         *self.instance_counter = 0;
 
         if self.root_swf.is_action_script_3() {
@@ -367,7 +381,7 @@ impl<'gc> UpdateContext<'gc> {
             self.root_swf.width().to_pixels() as u32,
             self.root_swf.height().to_pixels() as u32,
         );
-        self.stage.set_movie(self.gc(), self.root_swf.clone());
+        self.stage.set_movie(self.gc(), *self.root_swf);
 
         let stage_domain = self.avm2.stage_domain();
         let mut activation = Avm2Activation::from_domain(self, stage_domain);
@@ -375,12 +389,12 @@ impl<'gc> UpdateContext<'gc> {
         activation
             .context
             .library
-            .library_for_movie_mut(activation.context.root_swf.clone())
+            .library_for_movie_mut(*activation.context.root_swf)
             .set_avm2_domain(stage_domain);
         activation.context.ui.set_mouse_visible(true);
 
-        let swf = activation.context.root_swf.clone();
-        let root: DisplayObject = MovieClip::player_root_movie(&mut activation, swf.clone()).into();
+        let swf = *activation.context.root_swf;
+        let root: DisplayObject = MovieClip::player_root_movie(&mut activation, swf).into();
 
         // The Stage `LoaderInfo` is permanently in the 'not yet loaded' state,
         // and has no associated `Loader` instance.
@@ -395,8 +409,6 @@ impl<'gc> UpdateContext<'gc> {
             .context
             .stage
             .set_loader_info(activation.gc(), stage_loader_info);
-
-        drop(activation);
 
         root.set_depth(0);
         root.set_perspective_projection(None); // Set default PerspectiveProjection
@@ -429,7 +441,7 @@ impl<'gc> UpdateContext<'gc> {
         self.audio.set_frame_rate(*self.frame_rate);
     }
 
-    pub fn replace_root_movie(&mut self, movie: SwfMovie) {
+    pub fn replace_root_movie(&mut self, movie: SwfMovieData) {
         // FIXME Use RAII here, e.g. destroy and recreate
         //       the player instance instead of cleaning up.
 
@@ -571,7 +583,10 @@ pub struct RenderContext<'a, 'gc> {
     pub gc_context: &'gc Mutation<'gc>,
 
     /// The library, which provides access to fonts and other definitions when rendering.
-    pub library: &'a Library<'gc>,
+    pub library: &'a mut Library<'gc>,
+
+    /// The UI backend, used to detect user interactions and load device fonts.
+    pub ui: &'a dyn UiBackend,
 
     /// The transform stack controls the matrix and color transform as we traverse the display hierarchy.
     pub transform_stack: &'a mut TransformStack,
@@ -640,10 +655,16 @@ impl<'gc> RenderContext<'_, 'gc> {
 #[collect(no_drop)]
 pub enum ActionType<'gc> {
     /// Normal frame or event actions.
-    Normal { bytecode: SwfSlice },
+    Normal {
+        bytecode: SwfSlice,
+        name: &'static str,
+    },
 
     /// AVM1 initialize clip event.
-    Initialize { bytecode: SwfSlice },
+    Initialize {
+        bytecode: SwfSlice,
+        name: &'static str,
+    },
 
     /// Construct a movie with a custom class or on(construct) events.
     Construct {
@@ -679,13 +700,15 @@ impl ActionType<'_> {
 impl fmt::Debug for ActionType<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            ActionType::Normal { bytecode } => f
+            ActionType::Normal { bytecode, name } => f
                 .debug_struct("ActionType::Normal")
                 .field("bytecode", bytecode)
+                .field("name", name)
                 .finish(),
-            ActionType::Initialize { bytecode } => f
+            ActionType::Initialize { bytecode, name } => f
                 .debug_struct("ActionType::Initialize")
                 .field("bytecode", bytecode)
+                .field("name", name)
                 .finish(),
             ActionType::Construct {
                 constructor,

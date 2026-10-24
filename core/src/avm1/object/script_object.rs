@@ -167,16 +167,16 @@ impl<'gc> Object<'gc> {
     ///
     /// Doesn't look up the prototype chain and ignores virtual properties, thus cannot cause
     /// any side-effects.
-    pub(super) fn get_data(
+    pub fn get_data(
         self,
         name: AvmString<'gc>,
-        activation: &mut Activation<'_, 'gc>,
-    ) -> Value<'gc> {
+        activation: &Activation<'_, 'gc>,
+    ) -> Option<Value<'gc>> {
         self.0
             .borrow()
             .properties
             .get(name, activation.is_case_sensitive())
-            .map_or(Value::Undefined, |property| property.data())
+            .map(|property| property.data())
     }
 
     /// Sets a data property on this object, ignoring attributes.
@@ -263,7 +263,7 @@ impl<'gc> Object<'gc> {
                 if name == istr!("length") {
                     let new_length = value.coerce_to_i32(activation)?;
                     let old_length = self.get_data(istr!("length"), activation);
-                    if let Value::Number(old_length) = old_length {
+                    if let Some(Value::Number(old_length)) = old_length {
                         for i in new_length.max(0)..f64_to_wrapping_i32(old_length) {
                             self.delete_element(activation, i);
                         }
@@ -727,11 +727,12 @@ impl<'gc> Object<'gc> {
         }
 
         self.get_data(istr!("__proto__"), activation)
+            .unwrap_or(Value::Undefined)
     }
 
     /// Retrieve the `prototype` of this object, as if it was a function.
     /// (don't confuse this with `self.proto()`!)
-    pub fn prototype(self, activation: &mut Activation<'_, 'gc>) -> Value<'gc> {
+    pub fn prototype(self, activation: &Activation<'_, 'gc>) -> Option<Value<'gc>> {
         // Ignore getters, __proto__, and SWF version attributes.
         self.get_data(istr!("prototype"), activation)
     }
@@ -783,7 +784,7 @@ impl<'gc> Object<'gc> {
 
     /// Checks if the object has a given named property on itself that is
     /// virtual.
-    pub(super) fn has_own_virtual(
+    pub(crate) fn has_own_virtual(
         self,
         activation: &mut Activation<'_, 'gc>,
         name: AvmString<'gc>,
@@ -940,6 +941,17 @@ impl<'gc> Object<'gc> {
         self.0.borrow().native.as_display_object()
     }
 
+    /// Check if this object is a native array.
+    ///
+    /// This doesn't inspect the object's prototype chain, and so is unrelated to
+    /// `instanceof Array`.
+    ///
+    /// Note that many built-ins don't check this and instead treat any object as
+    /// array-like via its `length` and numeric properties.
+    pub fn is_native_array(self) -> bool {
+        matches!(self.native(), NativeObject::Array(_))
+    }
+
     /// Get the underlying display node for this object, if it exists.
     pub fn as_display_object(self) -> Option<DisplayObject<'gc>> {
         //`super` actually can be used to invoke MovieClip methods
@@ -958,6 +970,7 @@ impl<'gc> Object<'gc> {
         }
 
         self.get_data(istr!("length"), activation)
+            .unwrap_or(Value::Undefined)
             .coerce_to_i32(activation)
     }
 
@@ -972,9 +985,9 @@ impl<'gc> Object<'gc> {
             return Ok(());
         }
 
-        if let NativeObject::Array(_) = self.native() {
+        if self.is_native_array() {
             let old_length = self.get_data(istr!("length"), activation);
-            if let Value::Number(old_length) = old_length {
+            if let Some(Value::Number(old_length)) = old_length {
                 for i in new_length.max(0)..f64_to_wrapping_i32(old_length) {
                     self.delete_element(activation, i);
                 }
@@ -1004,6 +1017,7 @@ impl<'gc> Object<'gc> {
 
         let index_str = AvmString::new_utf8(activation.gc(), index.to_string());
         self.get_data(index_str, activation)
+            .unwrap_or(Value::Undefined)
     }
 
     /// Sets a property of this object, as if it were an array.

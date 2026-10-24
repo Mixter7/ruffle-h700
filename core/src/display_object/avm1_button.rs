@@ -24,7 +24,6 @@ use ruffle_macros::istr;
 use ruffle_render::filters::Filter;
 use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::collections::BTreeMap;
-use std::sync::Arc;
 use swf::ButtonActionCondition;
 
 #[derive(Clone, Collect, Copy)]
@@ -45,7 +44,7 @@ impl fmt::Debug for Avm1Button<'_> {
 pub struct Avm1ButtonData<'gc> {
     base: InteractiveObjectBase<'gc>,
     cell: RefLock<Avm1ButtonDataMut<'gc>>,
-    shared: Gc<'gc, ButtonShared>,
+    shared: Gc<'gc, ButtonShared<'gc>>,
     object: Lock<Option<Object<'gc>>>,
     state: Cell<ButtonState>,
     tracking: Cell<ButtonTracking>,
@@ -63,12 +62,17 @@ struct Avm1ButtonDataMut<'gc> {
 }
 
 impl<'gc> Avm1Button<'gc> {
-    pub fn from_swf_tag(button: &swf::Button, source_movie: &SwfSlice, mc: &Mutation<'gc>) -> Self {
+    pub fn from_swf_tag(
+        button: &swf::Button,
+        movie: SwfMovie<'gc>,
+        swf_data: &SwfSlice,
+        mc: &Mutation<'gc>,
+    ) -> Self {
         let actions = button
             .actions
             .iter()
             .map(|action| ButtonAction {
-                action_data: source_movie.to_subslice(action.action_data),
+                action_data: swf_data.to_subslice(action.action_data),
                 conditions: action.conditions,
             })
             .collect();
@@ -78,7 +82,7 @@ impl<'gc> Avm1Button<'gc> {
             Avm1ButtonData {
                 base: Default::default(),
                 cell: RefLock::new(Avm1ButtonDataMut {
-                    container: ChildContainer::new(&source_movie.movie),
+                    container: ChildContainer::new(&movie),
                     hit_area: BTreeMap::new(),
                     hit_bounds: Default::default(),
                     text_field_bindings: Vec::new(),
@@ -86,7 +90,7 @@ impl<'gc> Avm1Button<'gc> {
                 shared: Gc::new(
                     mc,
                     ButtonShared {
-                        swf: source_movie.movie.clone(),
+                        swf: movie,
                         id: button.id,
                         actions,
                         cell: RefCell::new(ButtonSharedMut {
@@ -108,6 +112,10 @@ impl<'gc> Avm1Button<'gc> {
                 }),
             },
         ))
+    }
+
+    pub fn instantiate(self, mc: &Mutation<'gc>) -> Self {
+        Self(Gc::new(mc, (*self.0).clone()))
     }
 
     pub fn set_sounds(self, sounds: swf::ButtonSounds) {
@@ -160,7 +168,7 @@ impl<'gc> Avm1Button<'gc> {
                     _ => {
                         if let Some(child) = context
                             .library
-                            .library_for_movie_mut(movie.clone())
+                            .library_for_movie_mut(movie)
                             .instantiate_by_id(record.id, context.gc_context)
                         {
                             // New child that did not previously exist, create it.
@@ -249,16 +257,11 @@ impl<'gc> TDisplayObject<'gc> for Avm1Button<'gc> {
         HasPrefixField::as_prefix_gc(self.raw_interactive())
     }
 
-    fn instantiate(self, mc: &Mutation<'gc>) -> DisplayObject<'gc> {
-        let data: &Avm1ButtonData = &self.0;
-        Self(Gc::new(mc, data.clone())).into()
-    }
-
     fn id(self) -> CharacterId {
         self.0.shared.id
     }
 
-    fn movie(self) -> Arc<SwfMovie> {
+    fn movie(self) -> SwfMovie<'gc> {
         self.0.movie()
     }
 
@@ -272,13 +275,20 @@ impl<'gc> TDisplayObject<'gc> for Avm1Button<'gc> {
         self.set_default_instance_name(context);
 
         if self.0.object.get().is_none() {
-            let object = Object::new_with_native(
-                &context.strings,
-                Some(context.avm1.prototypes(self.swf_version()).button),
-                NativeObject::Button(self),
-            );
-            let obj = unlock!(Gc::write(context.gc(), self.0), Avm1ButtonData, object);
+            let id = ActivationIdentifier::root("[Construct]");
+            let mut activation = Activation::from_nothing(context, id, self.into());
+            let constr = activation.resolve_class([istr!("Button")]);
+            let proto = constr.and_then(|c| c.prototype(&activation));
+            let native = NativeObject::Button(self);
+            let object = Object::new_with_native(activation.strings(), proto, native);
+
+            let obj = unlock!(Gc::write(activation.gc(), self.0), Avm1ButtonData, object);
             obj.set(Some(object));
+
+            // The constructor is called, even though it does nothing by default.
+            if let Some(constr) = constr {
+                let _ = constr.construct_on_existing(&mut activation, object, &[]);
+            }
         }
 
         if !self.0.initialized.get() {
@@ -606,6 +616,7 @@ impl<'gc> Avm1ButtonData<'gc> {
                         parent,
                         ActionType::Normal {
                             bytecode: action.action_data.clone(),
+                            name: "[Button event]",
                         },
                         false,
                     );
@@ -615,8 +626,8 @@ impl<'gc> Avm1ButtonData<'gc> {
         handled
     }
 
-    fn movie(&self) -> Arc<SwfMovie> {
-        self.shared.swf.clone()
+    fn movie(&self) -> SwfMovie<'gc> {
+        self.shared.swf
     }
 }
 
@@ -652,11 +663,15 @@ pub enum ButtonTracking {
 
 /// Data shared between all instances of a button.
 #[derive(Collect, Debug)]
-#[collect(require_static)]
-struct ButtonShared {
-    swf: Arc<SwfMovie>,
+#[collect(no_drop)]
+struct ButtonShared<'gc> {
+    swf: SwfMovie<'gc>,
     id: CharacterId,
+
+    #[collect(require_static)]
     actions: Vec<ButtonAction>,
+
+    #[collect(require_static)]
     cell: RefCell<ButtonSharedMut>,
 }
 

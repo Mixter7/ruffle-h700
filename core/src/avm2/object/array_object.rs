@@ -1,14 +1,15 @@
 //! Array-structured objects
 
-use crate::avm2::Error;
-use crate::avm2::Multiname;
 use crate::avm2::activation::Activation;
 use crate::avm2::array::ArrayStorage;
+use crate::avm2::error::Error;
+use crate::avm2::index::ArrayIndex;
+use crate::avm2::multiname::Multiname;
 use crate::avm2::object::script_object::ScriptObjectData;
 use crate::avm2::object::{ClassObject, Object, TObject};
 use crate::avm2::value::Value;
 use crate::context::UpdateContext;
-use crate::string::{AvmString, WStr};
+use crate::string::AvmString;
 use core::fmt;
 use gc_arena::barrier::unlock;
 use gc_arena::{Collect, Gc, GcWeak, Mutation, lock::RefLock};
@@ -106,18 +107,9 @@ impl<'gc> ArrayObject<'gc> {
         .into()
     }
 
-    pub fn as_array_index(local_name: &WStr) -> Option<usize> {
-        // TODO: this should use a custom implementation instead of `parse()`,
-        // see `script_object::maybe_int_property`
+    pub fn set_element(self, mc: &Mutation<'gc>, index: ArrayIndex, value: Value<'gc>) {
+        let index = index.as_usize();
 
-        local_name
-            .parse::<u32>()
-            .ok()
-            .filter(|i| *i != u32::MAX)
-            .map(|i| i as usize)
-    }
-
-    pub fn set_element(self, mc: &Mutation<'gc>, index: usize, value: Value<'gc>) {
         unlock!(Gc::write(mc, self.0), ArrayObjectData, array)
             .borrow_mut()
             .set(index, value);
@@ -144,7 +136,7 @@ impl<'gc> TObject<'gc> for ArrayObject<'gc> {
     ) -> Result<Value<'gc>, Error<'gc>> {
         if name.valid_dynamic_name()
             && let Some(name) = name.local_name()
-            && let Some(index) = ArrayObject::as_array_index(&name)
+            && let Some(index) = ArrayIndex::from_wstr(&name)
             && let Some(result) = self.get_index_property(index)
         {
             return Ok(result);
@@ -153,14 +145,15 @@ impl<'gc> TObject<'gc> for ArrayObject<'gc> {
         self.base().get_property_local(name, activation)
     }
 
-    fn get_index_property(self, index: usize) -> Option<Value<'gc>> {
+    fn get_index_property(self, index: ArrayIndex) -> Option<Value<'gc>> {
+        let index = index.as_usize();
         self.0.array.borrow().get(index)
     }
 
     fn set_index_property(
         self,
         activation: &mut Activation<'_, 'gc>,
-        index: usize,
+        index: ArrayIndex,
         value: Value<'gc>,
     ) -> Option<Result<(), Error<'gc>>> {
         self.set_element(activation.gc(), index, value);
@@ -178,7 +171,7 @@ impl<'gc> TObject<'gc> for ArrayObject<'gc> {
 
         if name.valid_dynamic_name()
             && let Some(name) = name.local_name()
-            && let Some(index) = ArrayObject::as_array_index(&name)
+            && let Some(index) = ArrayIndex::from_wstr(&name)
         {
             self.set_element(mc, index, value);
 
@@ -197,8 +190,10 @@ impl<'gc> TObject<'gc> for ArrayObject<'gc> {
 
         if name.valid_dynamic_name()
             && let Some(name) = name.local_name()
-            && let Some(index) = ArrayObject::as_array_index(&name)
+            && let Some(index) = ArrayIndex::from_wstr(&name)
         {
+            let index = index.as_usize();
+
             unlock!(Gc::write(mc, self.0), ArrayObjectData, array)
                 .borrow_mut()
                 .delete(index);
@@ -212,8 +207,10 @@ impl<'gc> TObject<'gc> for ArrayObject<'gc> {
     fn has_own_property(self, name: &Multiname<'gc>) -> bool {
         if name.valid_dynamic_name()
             && let Some(name) = name.local_name()
-            && let Some(index) = ArrayObject::as_array_index(&name)
+            && let Some(index) = ArrayIndex::from_wstr(&name)
         {
+            let index = index.as_usize();
+
             return self.0.array.borrow().get(index).is_some();
         }
 
@@ -269,8 +266,8 @@ impl<'gc> TObject<'gc> for ArrayObject<'gc> {
     }
 
     fn property_is_enumerable(&self, name: AvmString<'gc>) -> bool {
-        ArrayObject::as_array_index(&name)
-            .map(|index| index < self.0.array.borrow().length())
+        ArrayIndex::from_wstr(&name)
+            .map(|index| index.as_usize() < self.0.array.borrow().length())
             .unwrap_or(false)
             || self.base().property_is_enumerable(name)
     }

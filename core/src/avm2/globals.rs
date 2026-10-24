@@ -8,9 +8,8 @@ use crate::avm2::script::TranslationUnit;
 use crate::avm2::{Avm2, Error, Multiname, Namespace, QName};
 use crate::context::UpdateContext;
 use crate::string::WStr;
-use crate::tag_utils::{self, ControlFlow, SwfMovie, SwfSlice, SwfStream};
+use crate::tag_utils::{self, ControlFlow, SwfMovie, SwfMovieData, SwfSlice, SwfStream};
 use gc_arena::Collect;
-use std::sync::Arc;
 use swf::TagCode;
 
 mod __ruffle__;
@@ -18,6 +17,7 @@ mod array;
 mod avmplus;
 mod boolean;
 mod class;
+mod concurrent;
 mod date;
 mod error;
 pub mod flash;
@@ -113,6 +113,7 @@ pub struct SystemClasses<'gc> {
     pub colortransform: ClassObject<'gc>,
     pub matrix: ClassObject<'gc>,
     pub matrix3d: ClassObject<'gc>,
+    pub vector3d: ClassObject<'gc>,
     pub perspectiveprojection: ClassObject<'gc>,
     pub illegaloperationerror: ClassObject<'gc>,
     pub eventdispatcher: ClassObject<'gc>,
@@ -226,6 +227,7 @@ pub struct SystemClassDefs<'gc> {
     pub display_object: Class<'gc>,
     pub sprite: Class<'gc>,
     pub urlrequestheader: Class<'gc>,
+    pub contentelement: Class<'gc>,
     pub contextmenuitem: Class<'gc>,
 }
 
@@ -291,6 +293,7 @@ impl<'gc> SystemClasses<'gc> {
             colortransform: object,
             matrix: object,
             matrix3d: object,
+            vector3d: object,
             perspectiveprojection: object,
             illegaloperationerror: object,
             eventdispatcher: object,
@@ -403,6 +406,7 @@ impl<'gc> SystemClassDefs<'gc> {
             display_object: object,
             sprite: object,
             urlrequestheader: object,
+            contentelement: object,
             contextmenuitem: object,
         }
     }
@@ -544,6 +548,9 @@ pub fn init_early_classes<'gc>(
 const PLAYERGLOBAL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/playerglobal_avm2.swf"));
 
 mod native {
+    // Some native methods have names starting with '_'.
+    #![allow(clippy::used_underscore_items)]
+
     include!(concat!(env!("OUT_DIR"), "/native_table.rs"));
 }
 
@@ -733,6 +740,7 @@ pub fn init_native_system_classes(activation: &mut Activation<'_, '_>) {
             ("flash.events", "FocusEvent", focusevent),
             ("flash.geom", "Matrix", matrix),
             ("flash.geom", "Matrix3D", matrix3d),
+            ("flash.geom", "Vector3D", vector3d),
             ("flash.geom", "PerspectiveProjection", perspectiveprojection),
             ("flash.geom", "Point", point),
             ("flash.geom", "Rectangle", rectangle),
@@ -810,6 +818,7 @@ pub fn init_native_system_classes(activation: &mut Activation<'_, '_>) {
                 rectangletexture
             ),
             ("flash.net", "URLRequestHeader", urlrequestheader),
+            ("flash.text.engine", "ContentElement", contentelement),
             ("flash.ui", "ContextMenuItem", contextmenuitem),
         ]
     );
@@ -824,12 +833,11 @@ pub fn load_playerglobal<'gc>(context: &mut UpdateContext<'gc>, domain: Domain<'
     context.avm2.native_custom_constructor_table = native::NATIVE_CUSTOM_CONSTRUCTOR_TABLE;
     context.avm2.native_fast_call_list = native::NATIVE_FAST_CALL_LIST;
 
-    let movie = Arc::new(
-        SwfMovie::from_data(PLAYERGLOBAL, "file:///".into(), None, None)
-            .expect("playerglobal_avm2.swf should be valid"),
-    );
+    let movie_data = SwfMovieData::from_data(PLAYERGLOBAL, "file:///".into(), None, None)
+        .expect("playerglobal_avm2.swf should be valid");
+    let movie = SwfMovie::new(context.gc(), movie_data);
 
-    let slice = SwfSlice::from(movie.clone());
+    let slice = SwfSlice::from(movie);
 
     let mut reader = slice.read_from(0);
 
@@ -838,7 +846,7 @@ pub fn load_playerglobal<'gc>(context: &mut UpdateContext<'gc>, domain: Domain<'
             let do_abc = reader
                 .read_do_abc_2()
                 .expect("playerglobal_avm2.swf should be valid");
-            Avm2::load_builtin_abc(context, do_abc.data, domain, movie.clone());
+            Avm2::load_builtin_abc(context, do_abc.data, domain, movie);
         } else if tag_code != TagCode::End {
             panic!("playerglobal should only contain `DoAbc2` tag - found tag {tag_code:?}")
         }

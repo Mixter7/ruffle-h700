@@ -221,9 +221,8 @@ fn get_rectangle<'gc>(
         return Ok((-1).into());
     };
 
-    let proto = activation.prototypes().rectangle_constructor;
-    let rect = proto.construct(
-        activation,
+    let rect = activation.instantiate_class_fast(
+        [istr!("flash"), istr!("geom"), istr!("Rectangle")],
         &[
             0.into(),
             0.into(),
@@ -231,8 +230,7 @@ fn get_rectangle<'gc>(
             bitmap_data.height().into(),
         ],
     )?;
-
-    Ok(rect)
+    Ok(rect.unwrap_or_else(|| (-1).into()))
 }
 
 fn get_pixel<'gc>(
@@ -547,11 +545,23 @@ fn draw<'gc>(
         .unwrap_or(&false.into())
         .as_bool(activation.swf_version());
 
-    let source = match get_bitmap_data(args.get_object(activation, 0)?) {
+    let source_value = args.get(0).copied().unwrap_or(Value::Undefined);
+    let source_object = source_value.coerce_to_object_or_bare(activation)?;
+
+    let source = match get_bitmap_data(source_object) {
         BitmapDataResult::Valid(s) => IBitmapDrawable::BitmapData(s),
         BitmapDataResult::Disposed => return Ok((-3).into()),
         BitmapDataResult::NotBitmapData(source) => {
             if let Some(source_object) = source.as_display_object() {
+                IBitmapDrawable::DisplayObject(source_object)
+            } else if matches!(source_value, Value::String(_)) {
+                let start_clip = activation.target_clip_or_root();
+                let Some(source_object) =
+                    activation.resolve_target_display_object(start_clip, source_value, false)?
+                else {
+                    return Ok((-2).into());
+                };
+
                 IBitmapDrawable::DisplayObject(source_object)
             } else {
                 return Ok((-2).into());
@@ -570,6 +580,7 @@ fn draw<'gc>(
             matrix,
             color_transform,
             perspective_projection: None,
+            tz: 0.0,
         },
         smoothing,
         blend_mode,
@@ -585,7 +596,7 @@ fn draw<'gc>(
         }
     }
 
-    Ok(Value::Undefined)
+    Ok(0.into())
 }
 
 fn apply_filter<'gc>(
@@ -730,9 +741,11 @@ fn get_color_bounds_rect<'gc>(
         color,
     );
 
-    let proto = activation.prototypes().rectangle_constructor;
-    let rect = proto.construct(activation, &[x.into(), y.into(), w.into(), h.into()])?;
-    Ok(rect)
+    let rect = activation.instantiate_class_fast(
+        [istr!("flash"), istr!("geom"), istr!("Rectangle")],
+        &[x.into(), y.into(), w.into(), h.into()],
+    )?;
+    Ok(rect.unwrap_or_else(|| (-1).into()))
 }
 
 fn perlin_noise<'gc>(
@@ -1313,7 +1326,7 @@ fn load_bitmap<'gc>(
 
     let character = library
         .library_for_movie(movie)
-        .and_then(|l| l.character_by_export_name(name));
+        .and_then(|l| l.character_by_export_name(&name));
 
     let Some((_id, Character::Bitmap(bitmap))) = character else {
         return Ok(Value::Undefined);
