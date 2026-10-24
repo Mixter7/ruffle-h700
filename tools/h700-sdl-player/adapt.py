@@ -103,7 +103,62 @@ old='''        match self.quality {
             _ => 1.0,
         }'''
 assert t.count(old)==1
-g.write_text(t.replace(old,'        1.0'),encoding='utf-8')
+t=t.replace(old,'        1.0')
+blend_start=t.index('        let (blend_op, src_rgb, dst_rgb) = match mode {')
+blend_end=t.index('        unsafe {',blend_start)
+t=t[:blend_start]+'        let (blend_op, src_rgb, dst_rgb) = h700_blend_factors(mode);\n'+t[blend_end:]
+t += '''
+// Same premultiplied-alpha Screen state as upstream Ruffle's wgpu renderer.
+fn h700_blend_factors(mode: RenderBlendMode) -> (u32, u32, u32) {
+    match mode {
+        RenderBlendMode::Builtin(BlendMode::Screen) => (glow::FUNC_ADD, glow::ONE, glow::ONE_MINUS_SRC_COLOR),
+        RenderBlendMode::Builtin(BlendMode::Add) => (glow::FUNC_ADD, glow::ONE, glow::ONE),
+        RenderBlendMode::Builtin(BlendMode::Subtract) => (glow::FUNC_REVERSE_SUBTRACT, glow::ONE, glow::ONE),
+        _ => (glow::FUNC_ADD, glow::ONE, glow::ONE_MINUS_SRC_ALPHA),
+    }
+}
+#[cfg(test)]
+mod h700_blend_tests {
+    use super::*;
+    // Evaluate the factors used by the actual renderer, then compare against
+    // the independent straight-color compositing definition of Screen.
+    fn channel(src: f32, dst: f32, alpha: f32, mode: BlendMode) -> f32 {
+        let (op, sf, df)=h700_blend_factors(RenderBlendMode::Builtin(mode));
+        assert_eq!(sf, glow::ONE);
+        let factor=match df {
+            glow::ONE => 1.0,
+            glow::ONE_MINUS_SRC_COLOR => 1.0-src,
+            glow::ONE_MINUS_SRC_ALPHA => 1.0-alpha,
+            _ => panic!("unexpected factor"),
+        };
+        if op==glow::FUNC_REVERSE_SUBTRACT { dst*factor-src } else { src+dst*factor }
+    }
+    #[test]
+    fn screen_matches_compositing_with_partial_transparency() {
+        for sa in [0.0,0.25,0.5,1.0] {
+            for da in [0.0,0.25,0.75,1.0] {
+                for s in [0.0,0.2,0.7,1.0] {
+                    for d in [0.0,0.4,0.8,1.0] {
+                        let blended=1.0-(1.0-s)*(1.0-d);
+                        let expected=(1.0-sa)*da*d+(1.0-da)*sa*s+sa*da*blended;
+                        let actual=channel(sa*s,da*d,sa,BlendMode::Screen);
+                        assert!((actual-expected).abs()<0.00001);
+                    }
+                }
+            }
+        }
+    }
+    #[test]
+    fn screen_black_preserves_background_and_white_lightens() {
+        assert!((channel(0.0,0.6,1.0,BlendMode::Screen)-0.6).abs()<0.00001);
+        assert!((channel(1.0,0.6,1.0,BlendMode::Screen)-1.0).abs()<0.00001);
+        assert!((channel(0.2,0.6,0.5,BlendMode::Normal)-0.5).abs()<0.00001);
+        assert!((channel(0.2,0.6,0.5,BlendMode::Add)-0.8).abs()<0.00001);
+        assert!((channel(0.2,0.6,0.5,BlendMode::Subtract)-0.4).abs()<0.00001);
+    }
+}
+'''
+g.write_text(t,encoding='utf-8')
 # Avoid unbounded debug output in gameplay. Keep errors and explicit startup diagnostics.
 s=s.replace('println!("按钮按下: {:?}", button);','').replace('println!("按钮释放: {:?}", button);','')
 p.write_text(s,encoding='utf-8')
