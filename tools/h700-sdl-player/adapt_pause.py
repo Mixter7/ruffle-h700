@@ -20,6 +20,21 @@ def adapt(root):
     let mut pause_was_playing = true;
     let mut held_keys = std::collections::HashSet::<Keycode>::new();
     let mut use_mouse = false;''')
+    rep('''                // Release mouse buttons before hiding the cursor, even with R2/L2 held.''', '''                // Release keyboard input before changing its meaning to mouse input.
+                if !use_mouse {
+                    if let Some(player) = playerbox.as_ref() {
+                        let mut player = player.player.lock().unwrap();
+                        for kc in held_keys.drain() {
+                            if let Some(key) = keycodes::sdl2_keycode_to_ruffle_key_descriptor(kc) {
+                                player.handle_event(PlayerEvent::KeyUp { key });
+                            }
+                        }
+                    }
+                }
+                left_trigger_active = false;
+                right_trigger_active = false;
+                v_mouse = keycodes::VirtualMouse::new(mouse_x as f32, mouse_y as f32);
+                // Release mouse buttons before hiding the cursor, even with R2/L2 held.''')
     anchor='            if matches!(event, Event::ControllerButtonDown { button: Button::Guide, .. }) {'
     rep(anchor,'''            let start_down = matches!(event, Event::ControllerButtonDown { button: Button::Start, .. });
             if pause_menu.active {
