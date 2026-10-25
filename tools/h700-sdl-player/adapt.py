@@ -207,3 +207,5 @@ c.write_text(c.read_text(encoding='utf-8').replace('ruffle_video_external = { pa
 print('H700 SDL/GLES3 adaptation applied; full-size textures, MENU+START exit.')
 from adapt_pause import adapt
 adapt(root)
+from adapt_graphics import adapt as adapt_graphics
+adapt_graphics(root)
