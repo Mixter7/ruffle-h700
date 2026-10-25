@@ -205,3 +205,5 @@ p.write_text(s,encoding='utf-8')
 c=root/'sdl2test-u/Cargo.toml'
 c.write_text(c.read_text(encoding='utf-8').replace('ruffle_video_external = { path = "../video/external" }',''),encoding='utf-8')
 print('H700 SDL/GLES3 adaptation applied; full-size textures, MENU+START exit.')
+from adapt_pause import adapt
+adapt(root)

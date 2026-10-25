@@ -40,6 +40,7 @@ jobs:
         run: |
           mkdir -p out/H7Flash-SDL/licenses
           cp sdl-source/target/release/sdl2test-u out/H7Flash-SDL/ruffle-sdl
+          cp tools/h700-sdl-player/flash_menu.py tools/h700-sdl-player/game_options.py tools/h700-sdl-player/progress_store.py tools/h700-sdl-player/controls.json out/H7Flash-SDL/
           cp sdl-source/LICENSE* out/H7Flash-SDL/licenses/
           file out/H7Flash-SDL/ruffle-sdl
           ldd out/H7Flash-SDL/ruffle-sdl > out/H7Flash-SDL/dependencies.txt
