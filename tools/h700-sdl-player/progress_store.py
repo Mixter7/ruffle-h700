@@ -20,7 +20,7 @@ def object_path(root, name):
     if relative.is_absolute() or '..' in relative.parts:
         raise ValueError('Caminho de save invalido')
     path=Path(root).joinpath(*relative.parts)
-    if not path.resolve().is_relative_to(Path(root).resolve()):
+    if os.path.commonpath([str(path.resolve()),str(Path(root).resolve())]) != str(Path(root).resolve()):
         raise ValueError('Save fora da pasta do jogo')
     if any(p.is_symlink() for p in [path,*path.parents] if p != Path(root).parent):
         raise ValueError('Link simbolico no save')

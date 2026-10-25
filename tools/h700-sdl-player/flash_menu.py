@@ -8,7 +8,6 @@
 # Se A e B estiverem trocados no seu aparelho, crie H7Flash/menu.cfg com:  swap_ab=1
 
 import os, sys, glob, zlib, ctypes, time
-import game_options
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LOG = os.path.join(HERE, "menu_log.txt")
@@ -38,6 +37,7 @@ for d in ("/usr/lib64", "/usr/lib", "/usr/lib/aarch64-linux-gnu", "/opt/muos/ext
 
 try:
     import sdl2
+    import game_options
 except Exception as e:  # noqa
     log("ERRO: nao consegui importar sdl2 (pySDL2):", repr(e))
     log("sys.path =", sys.path)

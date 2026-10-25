@@ -25,7 +25,9 @@ jobs:
           ref: 2d8383792ad9ca984d14a2787858151ff03e4434
           path: sdl-source
       - name: Adapt for H700
-        run: python3 tools/h700-sdl-player/adapt.py sdl-source
+        run: |
+          python3 tools/h700-sdl-player/test_features.py
+          python3 tools/h700-sdl-player/adapt.py sdl-source
       - name: Rust
         run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
       - name: Test and build
