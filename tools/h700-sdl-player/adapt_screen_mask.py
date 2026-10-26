@@ -8,10 +8,10 @@ def adapt(root):
         assert s.count(a)==1,(a,s.count(a))
         s=s.replace(a,b)
     rep('    h700_blend_pool: Vec<H700BlendTarget>,','    h700_blend_pool: Vec<H700BlendTarget>,\n    h700_screen_texture: Option<BitmapHandle>,\n    h700_screen_stencil_bits: i32,')
-    rep('            h700_blend_pool: Vec::new(),','            h700_blend_pool: Vec::new(),\n            h700_screen_texture: None,\n            h700_screen_stencil_bits: unsafe { gl.get_parameter_i32(glow::STENCIL_BITS) },')
+    rep('            h700_blend_pool: Vec::new(),','            h700_blend_pool: Vec::new(),\n            h700_screen_texture: None,\n            h700_screen_stencil_bits: unsafe { gl.get_parameter_i32(0x0D57 /* GL_STENCIL_BITS (GLES) */) },')
     # gl has moved into the struct by this point; query before construction.
-    rep('        let mut renderer = Self {','        let h700_screen_stencil_bits = unsafe { gl.get_parameter_i32(glow::STENCIL_BITS) };\n        eprintln!("H700 screen stencil bits={h700_screen_stencil_bits}");\n        let mut renderer = Self {')
-    rep('            h700_screen_stencil_bits: unsafe { gl.get_parameter_i32(glow::STENCIL_BITS) },','            h700_screen_stencil_bits,')
+    rep('        let mut renderer = Self {','        let h700_screen_stencil_bits = unsafe { gl.get_parameter_i32(0x0D57 /* GL_STENCIL_BITS (GLES) */) };\n        eprintln!("H700 screen stencil bits={h700_screen_stencil_bits}");\n        let mut renderer = Self {')
+    rep('            h700_screen_stencil_bits: unsafe { gl.get_parameter_i32(0x0D57 /* GL_STENCIL_BITS (GLES) */) },','            h700_screen_stencil_bits,')
     rep('''    fn render_to_screen(&mut self, clear: Color, commands: CommandList) -> Result<(), BitmapError> {
         let use_stencil = Self::commands_use_stencil(&commands);''','''    fn render_to_screen(&mut self, clear: Color, commands: CommandList) -> Result<(), BitmapError> {
         let use_stencil = Self::commands_use_stencil(&commands);
