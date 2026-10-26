@@ -209,3 +209,5 @@ from adapt_pause import adapt
 adapt(root)
 from adapt_graphics import adapt as adapt_graphics
 adapt_graphics(root)
+from adapt_blend import adapt as adapt_blend
+adapt_blend(root)
