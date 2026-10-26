@@ -213,3 +213,5 @@ from adapt_blend import adapt as adapt_blend
 adapt_blend(root)
 from adapt_pixel_probe import adapt as adapt_pixel_probe
 adapt_pixel_probe(root)
+from adapt_resource_cache import adapt as adapt_resource_cache
+adapt_resource_cache(root)
