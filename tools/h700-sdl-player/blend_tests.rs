@@ -23,7 +23,7 @@ mod h700_gpu_tests {
         let window=video.window("render-test",16,16).opengl().hidden().build().unwrap();let _context=window.gl_create_context().unwrap();
         let gl=unsafe{glow::Context::from_loader_function(|s|video.gl_get_proc_address(s) as *const _)};
         let mut r=unsafe{GlRenderBackend::new(gl,16,16,StageQuality::Low).unwrap()};
-        let target=r.create_empty_texture(16,16).unwrap();let texture=as_registry_data(&target).texture;
+        let target=r.create_empty_texture(std::num::NonZeroU32::new(16).unwrap(),std::num::NonZeroU32::new(16).unwrap()).unwrap();let texture=as_registry_data(&target).texture;
         let source=Color{r:196,g:64,b:128,a:128};let dest=Color{r:64,g:160,b:224,a:128};
         for mode in [BlendMode::Multiply,BlendMode::Darken,BlendMode::HardLight] {
             for sa in [0,128,255] {for da in [0,128,255] {
