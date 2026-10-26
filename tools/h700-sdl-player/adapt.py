@@ -215,3 +215,5 @@ from adapt_pixel_probe import adapt as adapt_pixel_probe
 adapt_pixel_probe(root)
 from adapt_resource_cache import adapt as adapt_resource_cache
 adapt_resource_cache(root)
+from adapt_screen_mask import adapt as adapt_screen_mask
+adapt_screen_mask(root)
