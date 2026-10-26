@@ -211,3 +211,5 @@ from adapt_graphics import adapt as adapt_graphics
 adapt_graphics(root)
 from adapt_blend import adapt as adapt_blend
 adapt_blend(root)
+from adapt_pixel_probe import adapt as adapt_pixel_probe
+adapt_pixel_probe(root)
