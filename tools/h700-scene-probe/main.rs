@@ -11,8 +11,9 @@ fn main()->Result<(),Box<dyn std::error::Error>> {
     let w=movie.width().to_pixels().max(1.0) as u32;let h=movie.height().to_pixels().max(1.0) as u32;
     let frames:u32=args.get(3).map(|v|v.parse()).transpose()?.unwrap_or(600);
     let sdl=sdl2::init()?;let video=sdl.video()?;
-    video.gl_attr().set_context_profile(sdl2::video::GLProfile::Compatibility);
-    video.gl_attr().set_context_version(3,3);video.gl_attr().set_stencil_size(8);
+    let es=std::env::var_os("H700_CAPTURE_GLES").is_some();
+    video.gl_attr().set_context_profile(if es {sdl2::video::GLProfile::GLES} else {sdl2::video::GLProfile::Compatibility});
+    video.gl_attr().set_context_version(3,if es {0} else {3});video.gl_attr().set_stencil_size(8);
     let window=video.window("H7Flash scene capture",w,h).opengl().hidden().build()?;
     let _context=window.gl_create_context()?;
     let gl=unsafe{glow::Context::from_loader_function(|s|video.gl_get_proc_address(s) as *const _)};
@@ -25,6 +26,12 @@ fn main()->Result<(),Box<dyn std::error::Error>> {
     for frame in 1..=frames {
         for _ in events.poll_iter() {}
         let mut player=player.lock().unwrap();
+        if args.len()>=7 && frame==args[6].parse::<u32>()? {
+            let x=args[4].parse::<f64>()?;let y=args[5].parse::<f64>()?;
+            player.handle_event(ruffle_core::events::PlayerEvent::MouseMove{x,y});
+            player.handle_event(ruffle_core::events::PlayerEvent::MouseDown{x,y,button:ruffle_core::events::MouseButton::Left,index:None});
+            player.handle_event(ruffle_core::events::PlayerEvent::MouseUp{x,y,button:ruffle_core::events::MouseButton::Left});
+        }
         let dt=1000.0/player.frame_rate().max(1.0);
         player.tick(ruffle_common::duration::FloatDuration::from_millis(dt));player.render();
         if [1,60,180,600].contains(&frame) || frame==frames {
