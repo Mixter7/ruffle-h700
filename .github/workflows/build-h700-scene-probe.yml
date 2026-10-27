@@ -24,6 +24,7 @@ jobs:
         working-directory: sdl-source
         env:
           RUSTFLAGS: -A dangerous_implicit_autorefs
+          CMAKE_POLICY_VERSION_MINIMUM: '3.5'
         run: cargo build --release -p sdl2test-u
       - uses: actions/upload-artifact@v4
         with:
