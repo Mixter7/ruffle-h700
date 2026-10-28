@@ -3,7 +3,9 @@ import sys
 root=Path(sys.argv[1]);src=Path(__file__).parent
 (root/'sdl2test-u/src/main.rs').write_text((src/'main.rs').read_text(encoding='utf-8-sig'),encoding='utf-8')
 p=root/'sdl2test-u/Cargo.toml'
-s=p.read_text().replace('features = ["raw-window-handle"]','features = ["raw-window-handle", "bundled", "static-link"]')
+s=p.read_text()
+if sys.platform == 'win32':
+    s=s.replace('features = ["raw-window-handle"]','features = ["raw-window-handle", "bundled", "static-link"]')
 p.write_text(s,encoding='utf-8')
 # Fixed RNG seed is confined to this diagnostic build. Gameplay builds retain
 # their normal randomness. This does not freeze Date or asynchronous loading.

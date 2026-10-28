@@ -1,0 +1,49 @@
+name: H700 device scene investigation
+on:
+  workflow_dispatch:
+  push:
+    branches: [h700-upstream-update]
+    paths: [.github/workflows/build-h700-scene-device.yml]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    container: debian:bullseye
+    steps:
+      - name: Dependencies
+        run: |
+          sed -i -e 's|deb.debian.org/debian-security|archive.debian.org/debian-security|g' -e 's|security.debian.org/debian-security|archive.debian.org/debian-security|g' -e 's|deb.debian.org/debian|archive.debian.org/debian|g' -e '/bullseye-updates/d' /etc/apt/sources.list
+          apt-get update
+          apt-get install -y build-essential libsdl2-dev libasound2-dev libudev-dev libdbus-1-dev pkg-config git curl ca-certificates python3 default-jre-headless file
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: aweigit/ruffle-miyooflip
+          ref: 2d8383792ad9ca984d14a2787858151ff03e4434
+          path: sdl-source
+      - name: Prepare diagnostic only
+        run: |
+          python3 tools/h700-sdl-player/adapt.py sdl-source
+          python3 tools/h700-scene-probe/prepare.py sdl-source
+      - name: Rust
+        run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+      - name: Build
+        working-directory: sdl-source
+        run: |
+          . "$HOME/.cargo/env"
+          export RUSTFLAGS='-C target-cpu=cortex-a53 -A dangerous_implicit_autorefs'
+          cargo build --release -p sdl2test-u
+      - name: Package
+        run: |
+          mkdir out
+          cp sdl-source/target/release/sdl2test-u out/h700-scene-probe
+          file out/h700-scene-probe
+          ldd out/h700-scene-probe > out/dependencies.txt
+          ! grep -q 'not found' out/dependencies.txt
+          echo "$GITHUB_SHA" > out/revision.txt
+          sha256sum out/h700-scene-probe > out/sha256.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H700-device-scene-probe
+          path: out/
