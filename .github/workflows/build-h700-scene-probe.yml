@@ -20,6 +20,9 @@ jobs:
         run: |
           python tools/h700-sdl-player/adapt.py sdl-source
           python tools/h700-scene-probe/prepare.py sdl-source
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sdl-source -> target
       - name: Build
         working-directory: sdl-source
         env:

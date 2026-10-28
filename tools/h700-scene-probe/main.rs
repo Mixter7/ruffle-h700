@@ -8,7 +8,9 @@ fn main()->Result<(),Box<dyn std::error::Error>> {
     let path=std::fs::canonicalize(&args[1])?;
     let bytes=std::fs::read(&path)?;
     let movie=SwfMovie::from_data(&bytes,url::Url::from_file_path(&path).map_err(|_|"invalid path")?.to_string(),None)?;
-    let w=movie.width().to_pixels().max(1.0) as u32;let h=movie.height().to_pixels().max(1.0) as u32;
+    let w=std::env::var("H700_CAPTURE_WIDTH").ok().map(|v|v.parse::<u32>()).transpose()?.unwrap_or(movie.width().to_pixels().max(1.0) as u32);
+    let h=std::env::var("H700_CAPTURE_HEIGHT").ok().map(|v|v.parse::<u32>()).transpose()?.unwrap_or(movie.height().to_pixels().max(1.0) as u32);
+    if w==0 || h==0 {return Err("capture dimensions must be positive".into());}
     let frames:u32=args.get(3).map(|v|v.parse()).transpose()?.unwrap_or(600);
     let sdl=sdl2::init()?;let video=sdl.video()?;
     let es=std::env::var_os("H700_CAPTURE_GLES").is_some();
@@ -18,6 +20,7 @@ fn main()->Result<(),Box<dyn std::error::Error>> {
     let _context=window.gl_create_context()?;
     let gl=unsafe{glow::Context::from_loader_function(|s|video.gl_get_proc_address(s) as *const _)};
     eprintln!("Scene capture GPU: {}",unsafe{gl.get_parameter_string(glow::RENDERER)});
+    eprintln!("Scene capture API: {}; viewport {w}x{h}; seed {}",unsafe{gl.get_parameter_string(glow::VERSION)},std::env::var("H700_CAPTURE_SEED").unwrap_or_else(|_|"12345".into()));
     let read_gl=unsafe{glow::Context::from_loader_function(|s|video.gl_get_proc_address(s) as *const _)};
     let renderer=unsafe{gl_backend::GlRenderBackend::new(gl,w,h,ruffle_render::quality::StageQuality::Low)?};
     let player=PlayerBuilder::new().with_movie(movie).with_renderer(renderer).with_autoplay(true).with_viewport_dimensions(w,h,1.0).build();
@@ -37,9 +40,10 @@ fn main()->Result<(),Box<dyn std::error::Error>> {
         if [1,60,180,600].contains(&frame) || frame==frames {
             let mut pixels=vec![0u8;(w*h*4) as usize];
             unsafe{read_gl.read_pixels(0,0,w as i32,h as i32,glow::RGBA,glow::UNSIGNED_BYTE,glow::PixelPackData::Slice(&mut pixels));}
-            let mut file=std::fs::File::create(output.join(format!("frame-{frame:04}.ppm")))?;
+            let mut file=std::io::BufWriter::new(std::fs::File::create(output.join(format!("frame-{frame:04}.ppm")))?);
             write!(file,"P6\n{w} {h}\n255\n")?;
             for y in (0..h).rev(){for x in 0..w{let i=((y*w+x)*4) as usize;file.write_all(&pixels[i..i+3])?;}}
+            file.flush()?;
             eprintln!("captured frame {frame}");
         }
     }
