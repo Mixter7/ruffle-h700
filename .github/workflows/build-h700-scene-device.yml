@@ -33,6 +33,7 @@ jobs:
         run: |
           . "$HOME/.cargo/env"
           export RUSTFLAGS='-C target-cpu=cortex-a53 -A dangerous_implicit_autorefs'
+          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=gcc
           cargo build --release -p sdl2test-u
       - name: Package
         run: |
