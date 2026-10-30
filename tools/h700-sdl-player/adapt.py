@@ -217,3 +217,5 @@ from adapt_resource_cache import adapt as adapt_resource_cache
 adapt_resource_cache(root)
 from adapt_screen_mask import adapt as adapt_screen_mask
 adapt_screen_mask(root)
+from adapt_filter_coordinates import adapt as adapt_filter_coordinates
+adapt_filter_coordinates(root)
