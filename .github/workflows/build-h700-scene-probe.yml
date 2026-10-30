@@ -1,0 +1,35 @@
+name: H700 Windows scene investigation
+on:
+  workflow_dispatch:
+  push:
+    branches: [h700-upstream-update]
+    paths: [tools/h700-scene-probe/**, .github/workflows/build-h700-scene-probe.yml]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: aweigit/ruffle-miyooflip
+          ref: 2d8383792ad9ca984d14a2787858151ff03e4434
+          path: sdl-source
+      - name: Prepare isolated Windows capture tool
+        run: |
+          python tools/h700-sdl-player/adapt.py sdl-source
+          python tools/h700-scene-probe/prepare.py sdl-source
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sdl-source -> target
+      - name: Build
+        working-directory: sdl-source
+        env:
+          RUSTFLAGS: -A dangerous_implicit_autorefs
+          CMAKE_POLICY_VERSION_MINIMUM: '3.5'
+        run: cargo build --release -p sdl2test-u
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H7Flash-Windows-scene-probe
+          path: sdl-source/target/release/sdl2test-u.exe

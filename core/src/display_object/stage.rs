@@ -29,10 +29,9 @@ use ruffle_render::commands::CommandHandler;
 use ruffle_render::perspective_projection::PerspectiveProjection;
 use ruffle_render::quality::StageQuality;
 use ruffle_render::transform::Transform;
-use std::cell::{Cell, Ref, RefCell, RefMut};
+use std::cell::{Cell, Ref, RefMut};
 use std::fmt::{self, Display, Formatter};
 use std::str::FromStr;
-use std::sync::Arc;
 
 /// The Stage is the root of the display object hierarchy. It contains all AVM1
 /// levels as well as AVM2 movies.
@@ -77,7 +76,7 @@ pub struct StageData<'gc> {
     focus_tracker: FocusTracker<'gc>,
 
     /// The swf that registered this stage
-    movie: RefCell<Arc<SwfMovie>>,
+    movie: Lock<SwfMovie<'gc>>,
 
     /// The dimensions of the SWF file.
     movie_size: Cell<(u32, u32)>,
@@ -154,7 +153,7 @@ pub struct StageData<'gc> {
 }
 
 impl<'gc> Stage<'gc> {
-    pub fn empty(gc_context: &Mutation<'gc>, fullscreen: bool, movie: Arc<SwfMovie>) -> Stage<'gc> {
+    pub fn empty(gc_context: &Mutation<'gc>, fullscreen: bool, movie: SwfMovie<'gc>) -> Stage<'gc> {
         let stage = Self(Gc::new(
             gc_context,
             StageData {
@@ -186,7 +185,7 @@ impl<'gc> Stage<'gc> {
                 avm2_object: Lock::new(None),
                 loader_info: Lock::new(None),
                 stage3ds: RefLock::new(vec![]),
-                movie: RefCell::new(movie),
+                movie: Lock::new(movie),
                 viewport_matrix: Cell::new(Matrix::IDENTITY),
                 letterbox_matrix: Cell::new(Matrix::IDENTITY),
                 focus_tracker: FocusTracker::new(gc_context),
@@ -235,12 +234,14 @@ impl<'gc> Stage<'gc> {
         self.0.movie_size.set((width, height));
     }
 
-    pub fn set_movie(self, gc_context: &Mutation<'gc>, movie: Arc<SwfMovie>) {
+    pub fn set_movie(self, gc_context: &Mutation<'gc>, movie: SwfMovie<'gc>) {
         // Stage is the only DO that has a fake movie set and then gets the real movie set.
         // NOTE: Make sure to NOT reset any state here, AVM1 depends on it.
 
         let is_action_script_3 = movie.is_action_script_3();
-        self.0.movie.replace(movie);
+
+        unlock!(Gc::write(gc_context, self.0), StageData, movie).set(movie);
+
         unlock!(Gc::write(gc_context, self.0), StageData, child)
             .borrow_mut()
             .set_is_action_script_3(is_action_script_3);
@@ -285,6 +286,9 @@ impl<'gc> Stage<'gc> {
                 | StageQuality::High16x16Linear
         ));
         context.renderer.set_quality(quality);
+
+        // Flash Player redraws right away when the quality is changed.
+        *context.needs_render = true;
     }
 
     pub fn stage3ds(&self) -> Ref<'_, Vec<Avm2Stage3DObject<'gc>>> {
@@ -330,6 +334,9 @@ impl<'gc> Stage<'gc> {
 
         self.0.scale_mode.set(scale_mode);
         self.build_matrices(context);
+
+        // Flash Player redraws right away when the scale mode is changed.
+        *context.needs_render = true;
     }
 
     /// Get whether movies are prevented from changing the stage scale mode.
@@ -619,6 +626,7 @@ impl<'gc> Stage<'gc> {
             color_transform: Default::default(),
             // TODO: Verify perspective_projection when its rendering is implemented.
             perspective_projection: self.as_displayobject().base().perspective_projection(),
+            tz: 0.0,
         });
 
         // All of our Stage3D instances get rendered *underneath* the main stage.
@@ -811,10 +819,6 @@ impl<'gc> TDisplayObject<'gc> for Stage<'gc> {
         HasPrefixField::as_prefix_gc(self.raw_interactive())
     }
 
-    fn instantiate(self, gc_context: &Mutation<'gc>) -> DisplayObject<'gc> {
-        Self(Gc::new(gc_context, self.0.as_ref().clone())).into()
-    }
-
     fn local_to_global_matrix(self) -> Matrix {
         // The stage is in Stage coordinates by definition
         Default::default()
@@ -895,8 +899,8 @@ impl<'gc> TDisplayObject<'gc> for Stage<'gc> {
         self.0.loader_info.get()
     }
 
-    fn movie(self) -> Arc<SwfMovie> {
-        self.0.movie.borrow().clone()
+    fn movie(self) -> SwfMovie<'gc> {
+        self.0.movie.get()
     }
 }
 

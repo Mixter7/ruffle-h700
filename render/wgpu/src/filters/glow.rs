@@ -94,8 +94,8 @@ impl GlowFilter {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&bind_group_layout)],
+            immediate_size: 0,
         });
 
         Self {
@@ -144,7 +144,7 @@ impl GlowFilter {
                         targets: &[Some(wgpu::TextureFormat::Rgba8Unorm.into())],
                         compilation_options: Default::default(),
                     }),
-                    multiview: None,
+                    multiview_mask: None,
                     cache: None,
                 })
         })
@@ -196,13 +196,7 @@ impl GlowFilter {
             draw_encoder,
         );
         staging_belt
-            .write_buffer(
-                draw_encoder,
-                &self.uniform_buffer,
-                0,
-                self.uniform_size,
-                &descriptors.device,
-            )
+            .write_buffer(draw_encoder, &self.uniform_buffer, 0, self.uniform_size)
             .copy_from_slice(bytemuck::cast_slice(&[GlowUniform {
                 color: [
                     f32::from(filter.color.r) / 255.0,
@@ -216,13 +210,7 @@ impl GlowFilter {
                 composite_source: if filter.composite_source() { 1 } else { 0 },
             }]));
         staging_belt
-            .write_buffer(
-                draw_encoder,
-                &self.vertex_buffer,
-                0,
-                self.vertices_size,
-                &descriptors.device,
-            )
+            .write_buffer(draw_encoder, &self.vertex_buffer, 0, self.vertices_size)
             .copy_from_slice(bytemuck::cast_slice(&[
                 source.vertices_with_blur_offset(blur_offset)
             ]));
@@ -263,10 +251,10 @@ impl GlowFilter {
 
         render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         render_pass.set_index_buffer(
-            descriptors.quad.indices.slice(..),
+            descriptors.quad.index_buffer.slice(..),
             wgpu::IndexFormat::Uint32,
         );
-        render_pass.draw_indexed(0..6, 0, 0..1);
+        render_pass.draw_indexed(descriptors.quad.indices_quad.clone(), 0, 0..1);
         target
     }
 }

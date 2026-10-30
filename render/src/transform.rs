@@ -4,9 +4,10 @@ use swf::ColorTransform;
 
 /// Represents the transform for a DisplayObject.
 /// This includes both the transformation matrix and the color transform.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Transform {
     pub matrix: Matrix,
+    pub tz: f64,
     pub color_transform: ColorTransform,
     pub perspective_projection: Option<PerspectiveProjection>,
 }
@@ -22,11 +23,13 @@ impl TransformStack {
         let cur_transform = self.transform();
         let matrix = cur_transform.matrix * transform.matrix;
         let color_transform = cur_transform.color_transform * transform.color_transform;
+        let tz = cur_transform.tz + transform.tz;
         self.0.push(Transform {
             matrix,
             color_transform,
             // TODO: Merge perspective_projections from cur_transform and transform properly
             perspective_projection: Default::default(),
+            tz,
         });
     }
 

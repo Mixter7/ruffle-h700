@@ -1,37 +1,41 @@
 mod avm1;
 mod avm2;
+mod avm2_class;
 mod common;
 mod display_object;
 mod domain;
+mod font;
 mod handle;
 mod movie;
 
 use crate::context::{RenderContext, UpdateContext};
 use crate::debug_ui::avm1::Avm1ObjectWindow;
 use crate::debug_ui::avm2::Avm2ObjectWindow;
+use crate::debug_ui::avm2_class::Avm2ClassWindow;
 use crate::debug_ui::display_object::{DisplayObjectSearchWindow, DisplayObjectWindow};
 use crate::debug_ui::domain::DomainListWindow;
+use crate::debug_ui::font::FontWindow;
 use crate::debug_ui::handle::{
-    AVM1ObjectHandle, AVM2ObjectHandle, DisplayObjectHandle, DomainHandle,
+    AVM1ObjectHandle, AVM2ObjectHandle, ClassHandle, DisplayObjectHandle, DomainHandle, FontHandle,
+    MovieHandle,
 };
 use crate::debug_ui::movie::{MovieListWindow, MovieWindow};
 use crate::display_object::TDisplayObject;
 use crate::prelude::DisplayObject;
-use crate::tag_utils::SwfMovie;
 use gc_arena::DynamicRootSet;
 use hashbrown::HashMap;
 use std::fmt::{Debug, Formatter};
-use std::sync::{Arc, Weak};
 use swf::{Color, Rectangle, Twips};
-use weak_table::PtrWeakKeyHashMap;
 
 #[derive(Default)]
 pub struct DebugUi {
     display_objects: HashMap<DisplayObjectHandle, DisplayObjectWindow>,
-    movies: PtrWeakKeyHashMap<Weak<SwfMovie>, MovieWindow>,
+    movies: HashMap<MovieHandle, MovieWindow>,
     avm1_objects: HashMap<AVM1ObjectHandle, Avm1ObjectWindow>,
     avm2_objects: HashMap<AVM2ObjectHandle, Avm2ObjectWindow>,
+    avm2_classes: HashMap<ClassHandle, Avm2ClassWindow>,
     domains: HashMap<DomainHandle, DomainListWindow>,
+    fonts: HashMap<FontHandle, FontWindow>,
     queued_messages: Vec<Message>,
     items_to_save: Vec<ItemToSave>,
     movie_list: Option<MovieListWindow>,
@@ -43,9 +47,11 @@ pub struct DebugUi {
 pub enum Message {
     TrackDisplayObject(DisplayObjectHandle),
     TrackDomain(DomainHandle),
-    TrackMovie(Arc<SwfMovie>),
+    TrackMovie(MovieHandle),
     TrackAVM1Object(AVM1ObjectHandle),
     TrackAVM2Object(AVM2ObjectHandle),
+    TrackAVM2Class(ClassHandle),
+    TrackFont(FontHandle),
     TrackStage,
     TrackTopLevelMovie,
     ShowKnownMovies,
@@ -79,8 +85,20 @@ impl DebugUi {
             window.show(egui_ctx, context, object, &mut messages)
         });
 
-        self.movies
-            .retain(|movie, window| window.show(egui_ctx, context, movie, &mut messages));
+        self.avm2_classes.retain(|class, window| {
+            let class = class.fetch(context.dynamic_root);
+            window.show(egui_ctx, context, class, &mut messages)
+        });
+
+        self.movies.retain(|movie, window| {
+            let movie = movie.fetch(context.dynamic_root);
+            window.show(egui_ctx, context, movie, &mut messages)
+        });
+
+        self.fonts.retain(|font, window| {
+            let font = font.fetch(context.dynamic_root);
+            window.show(egui_ctx, font, &mut messages)
+        });
 
         if let Some(mut movie_list) = self.movie_list.take()
             && movie_list.show(egui_ctx, context, &mut messages)
@@ -115,14 +133,21 @@ impl DebugUi {
                     self.movies.insert(movie, Default::default());
                 }
                 Message::TrackTopLevelMovie => {
+                    let root_movie = *context.root_swf;
                     self.movies
-                        .insert(context.root_swf.clone(), Default::default());
+                        .insert(MovieHandle::new(context, root_movie), Default::default());
                 }
                 Message::TrackAVM1Object(object) => {
                     self.avm1_objects.insert(object, Default::default());
                 }
                 Message::TrackAVM2Object(object) => {
                     self.avm2_objects.insert(object, Default::default());
+                }
+                Message::TrackAVM2Class(class) => {
+                    self.avm2_classes.insert(class, Default::default());
+                }
+                Message::TrackFont(font) => {
+                    self.fonts.insert(font, Default::default());
                 }
                 Message::SaveFile(file) => {
                     self.items_to_save.push(file);
@@ -147,6 +172,19 @@ impl DebugUi {
                 }
             }
         }
+    }
+
+    pub fn has_open_windows(&self) -> bool {
+        !self.display_objects.is_empty()
+            || !self.movies.is_empty()
+            || !self.avm1_objects.is_empty()
+            || !self.avm2_objects.is_empty()
+            || !self.avm2_classes.is_empty()
+            || !self.domains.is_empty()
+            || !self.fonts.is_empty()
+            || self.movie_list.is_some()
+            || self.domain_list.is_some()
+            || self.display_object_search.is_some()
     }
 
     pub fn should_suspend_player(&self) -> bool {

@@ -33,13 +33,12 @@ num-traits = { workspace = true }
 num-derive = { workspace = true }
 quick-xml = { workspace = true }
 url = { workspace = true }
-weak-table = "0.3.2"
 percent-encoding = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true, features = ["clock"] }
 web-time = "1.1.0"
 encoding_rs = { workspace = true }
-rand = { version = "0.9.1", features = ["std", "os_rng"], default-features = false }
+rand = { workspace = true, features = ["std", "sys_rng"] }
 serde = { workspace = true }
 serde_json = { workspace = true, features = ["preserve_order"] }
 nellymoser-rs = { git = "https://github.com/ruffle-rs/nellymoser", rev = "073eb48d907201f46dea0c8feb4e8d9a1d92208c", optional = true }
@@ -56,8 +55,8 @@ hashbrown = { workspace = true }
 scopeguard = "1.2.0"
 fluent-templates = { workspace = true }
 egui = { workspace = true, optional = true }
-egui_extras = { version = "0.33.3", default-features = false, optional = true }
-png = { version = "0.18.1", optional = true }
+egui_extras = { workspace = true, default-features = false, optional = true }
+png = { workspace = true, optional = true }
 flv-rs = { path = "../flv" }
 async-channel = { workspace = true }
 jpegxr = { workspace = true, optional = true }
@@ -69,7 +68,7 @@ unicode-segmentation = "1.13.3"
 id3 = "1.17.0"
 either = "1.16.0"
 chardetng = "0.1.17"
-tracy-client = { version = "0.18.2", optional = true, default-features = false }
+tracy-client = { version = "0.18.4", optional = true, default-features = false }
 itertools = "0.14.0"
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies.futures]
@@ -83,7 +82,6 @@ default = []
 lzma = ["lzma-rs", "swf/lzma"]
 avm_debug = []
 tracy_avm = ["dep:tracy-client"]
-deterministic = []
 timeline_debug = []
 mp3 = ["symphonia", "symphonia/mp3"]
 aac = ["symphonia", "symphonia/aac"]

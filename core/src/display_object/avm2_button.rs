@@ -18,7 +18,7 @@ use crate::frame_lifecycle::{
     broadcast_frame_constructed, broadcast_frame_exited, catchup_display_object_to_frame,
 };
 use crate::prelude::*;
-use crate::tag_utils::{SwfMovie, SwfSlice};
+use crate::tag_utils::SwfMovie;
 use crate::vminterface::Instantiator;
 use core::fmt;
 use either::Either;
@@ -28,7 +28,6 @@ use gc_arena::{Collect, Gc, Mutation};
 use ruffle_common::utils::HasPrefixField;
 use ruffle_render::filters::Filter;
 use std::cell::{Cell, RefCell};
-use std::sync::Arc;
 
 #[derive(Clone, Collect, Copy)]
 #[collect(no_drop)]
@@ -48,7 +47,7 @@ impl fmt::Debug for Avm2Button<'_> {
 pub struct Avm2ButtonData<'gc> {
     base: InteractiveObjectBase<'gc>,
 
-    shared: Gc<'gc, ButtonShared>,
+    shared: Gc<'gc, ButtonShared<'gc>>,
 
     /// The display object tree to render when the button is in the UP state.
     up_state: Lock<Option<DisplayObject<'gc>>>,
@@ -102,7 +101,7 @@ pub struct Avm2ButtonData<'gc> {
 impl<'gc> Avm2Button<'gc> {
     pub fn from_swf_tag(
         button: &swf::Button,
-        source_movie: &SwfSlice,
+        movie: SwfMovie<'gc>,
         context: &mut UpdateContext<'gc>,
         construct_blank_states: bool,
     ) -> Self {
@@ -113,7 +112,7 @@ impl<'gc> Avm2Button<'gc> {
                 shared: Gc::new(
                     context.gc(),
                     ButtonShared {
-                        swf: source_movie.movie.clone(),
+                        swf: movie,
                         id: button.id,
                         cell: RefCell::new(ButtonSharedMut {
                             records: button.records.clone(),
@@ -146,7 +145,8 @@ impl<'gc> Avm2Button<'gc> {
     }
 
     pub fn empty_button(context: &mut UpdateContext<'gc>) -> Self {
-        let movie = context.root_swf.clone();
+        // TODO: Should this be using the caller movie?
+        let movie = *context.root_swf;
         let button_record = swf::Button {
             id: 0,
             is_track_as_menu: false,
@@ -154,7 +154,11 @@ impl<'gc> Avm2Button<'gc> {
             actions: Vec::new(),
         };
 
-        Self::from_swf_tag(&button_record, &movie.into(), context, false)
+        Self::from_swf_tag(&button_record, movie, context, false)
+    }
+
+    pub fn instantiate(self, mc: &Mutation<'gc>) -> Self {
+        Self(Gc::new(mc, (*self.0).clone()))
     }
 
     pub fn set_sounds(self, sounds: swf::ButtonSounds) {
@@ -204,7 +208,7 @@ impl<'gc> Avm2Button<'gc> {
             if record.states.contains(swf_state) {
                 match context
                     .library
-                    .library_for_movie_mut(movie.clone())
+                    .library_for_movie_mut(movie)
                     .instantiate_by_id(record.id, context.gc_context)
                 {
                     Some(child) => {
@@ -415,16 +419,12 @@ impl<'gc> TDisplayObject<'gc> for Avm2Button<'gc> {
         HasPrefixField::as_prefix_gc(self.raw_interactive())
     }
 
-    fn instantiate(self, mc: &Mutation<'gc>) -> DisplayObject<'gc> {
-        Self(Gc::new(mc, (*self.0).clone())).into()
-    }
-
     fn id(self) -> CharacterId {
         self.0.shared.id
     }
 
-    fn movie(self) -> Arc<SwfMovie> {
-        self.0.shared.swf.clone()
+    fn movie(self) -> SwfMovie<'gc> {
+        self.0.shared.swf
     }
 
     fn post_instantiation(
@@ -763,6 +763,10 @@ impl<'gc> TInteractiveObject<'gc> for Avm2Button<'gc> {
     ) -> Avm2MousePick<'gc> {
         // The button is hovered if the mouse is over any child nodes.
         if self.visible() && self.mouse_enabled() {
+            if !self.global_in_scroll_rect(point) {
+                return Avm2MousePick::Miss;
+            }
+
             let state_child = self.get_state_child(self.0.state.get().into());
 
             if let Some(state_child) = state_child {
@@ -819,9 +823,9 @@ impl<'gc> TInteractiveObject<'gc> for Avm2Button<'gc> {
 
 /// Data shared between all instances of a button.
 #[derive(Collect, Debug)]
-#[collect(require_static)]
-struct ButtonShared {
-    swf: Arc<SwfMovie>,
+#[collect(no_drop)]
+struct ButtonShared<'gc> {
+    swf: SwfMovie<'gc>,
     id: CharacterId,
     cell: RefCell<ButtonSharedMut>,
 }

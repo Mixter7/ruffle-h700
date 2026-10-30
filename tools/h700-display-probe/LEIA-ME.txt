@@ -1,0 +1,15 @@
+H7Flash — teste isolado de tela SDL2 / OpenGL ES 3
+
+Este programa verifica uma possível saída gráfica alternativa no muOS/H700. Não executa jogos e não é uma otimização instalada no H7Flash.
+
+Instalação: extraia este pacote em E:/ROMS/Ports. O arquivo H7Flash - Teste de tela.sh e a pasta H7Flash-teste-tela devem ficar juntos. Não é preciso substituir a pasta H7Flash existente.
+
+Abra H7Flash - Teste de tela pelo menu de Ports. Se conseguir abrir a tela, aparecerão três faixas (vermelha, verde e azul) e uma barra em movimento. Aperte alguns botões; a barra muda de cor quando um evento de botão/teclado é recebido. O teste fecha automaticamente após aproximadamente 12 segundos. O launcher limita a execução a 25 segundos se houver bloqueio.
+
+Depois, reconecte o cartão e diga se viu as cores e se voltou ao menu. O resultado técnico fica em H7Flash-teste-tela/resultado.txt. Se voltar imediatamente sem imagem, o registro também ajuda a identificar o motivo.
+
+Não modifica os drivers, clocks, jogos ou saves. Usa a SDL2 fornecida pelo firmware e solicita OpenGL ES 3 com stencil de 8 bits. Uma tela preta, erro ou detecção de backend sem tela não prova que todas as saídas alternativas são impossíveis; significa apenas que esse caminho precisa de adaptação.
+
+Este teste não mede desempenho de SWFs. Confirmação visual e compatibilidade com o renderizador do Ruffle são etapas separadas.
+
+Para remover, apague apenas H7Flash - Teste de tela.sh e H7Flash-teste-tela.
