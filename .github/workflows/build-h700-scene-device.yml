@@ -3,7 +3,9 @@ on:
   workflow_dispatch:
   push:
     branches: [h700-upstream-update]
-    paths: [.github/workflows/build-h700-scene-device.yml]
+    paths:
+      - .github/workflows/build-h700-scene-device.yml
+      - tools/h700-scene-probe/**
 permissions:
   contents: read
 jobs:
