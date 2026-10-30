@@ -43,4 +43,28 @@ s=s.replace(old,'''        if std::env::var_os("H700_CAPTURE_DIRECT_UPLOAD").is_
             return Ok(());
         }
 '''+old)
+# Trace the actual source and each cache filter result to locate the first
+# stage whose alpha/color differs on Mali. This code is diagnostic-only.
+old='''        let mut temp_textures = Vec::new();
+        let mut current = destination_texture;'''
+assert s.count(old)==1
+s=s.replace(old,'''        self.h700_trace_filter(destination_texture,width,height,"source before filters");
+'''+old)
+old='''            if let Err(error) = step_result {
+                result = Err(error);
+                break;
+            }
+        }
+
+        if result.is_ok() && current != destination_texture'''
+assert s.count(old)==1
+s=s.replace(old,'''            if let Err(error) = step_result {
+                result = Err(error);
+                break;
+            }
+            self.h700_trace_filter(current,width,height,&format!("after {filter:?}"));
+        }
+
+        if result.is_ok() && current != destination_texture''')
+s+='\n'+(src/'filter_trace.rs').read_text(encoding='utf-8')
 p.write_text(s,encoding='utf-8')

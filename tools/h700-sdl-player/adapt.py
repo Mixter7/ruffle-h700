@@ -219,3 +219,5 @@ from adapt_screen_mask import adapt as adapt_screen_mask
 adapt_screen_mask(root)
 from adapt_filter_coordinates import adapt as adapt_filter_coordinates
 adapt_filter_coordinates(root)
+from adapt_timing import adapt as adapt_timing
+adapt_timing(root)
